@@ -1,15 +1,20 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
@@ -21,10 +26,10 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
     public static final String CHILD_VALUE = "value";
 
     @Internal
-    protected ObjectField(String name, Value value, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
-        this.name = name;
-        this.value = value;
+    protected ObjectField(String name, Value value, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
+        this.name = assertNotNull(name);
+        this.value = assertNotNull(value);
     }
 
     /**
@@ -34,7 +39,7 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
      * @param value of the field
      */
     public ObjectField(String name, Value value) {
-        this(name, value, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, value, null, emptyList(), IgnoredChars.EMPTY, ImmutableKit.emptyMap());
     }
 
     @Override
@@ -48,9 +53,7 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
 
     @Override
     public List<Node> getChildren() {
-        List<Node> result = new ArrayList<>();
-        result.add(value);
-        return result;
+        return ImmutableList.of(value);
     }
 
     @Override
@@ -84,7 +87,7 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
 
     @Override
     public ObjectField deepCopy() {
-        return new ObjectField(name, deepCopy(this.value), getSourceLocation(), getComments(), getIgnoredChars());
+        return new ObjectField(name, deepCopy(this.value), getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -113,9 +116,10 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
         private String name;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private Value value;
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
@@ -123,9 +127,10 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
 
         private Builder(ObjectField existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
             this.value = existing.getValue();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -140,7 +145,7 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -154,9 +159,19 @@ public class ObjectField extends AbstractNode<ObjectField> implements NamedNode<
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
+
         public ObjectField build() {
-            ObjectField objectField = new ObjectField(name, value, sourceLocation, comments, ignoredChars);
-            return objectField;
+            return new ObjectField(name, value, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

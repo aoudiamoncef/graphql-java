@@ -2,6 +2,7 @@ package graphql.parser;
 
 import graphql.Assert;
 import graphql.Internal;
+import graphql.language.SourceLocation;
 
 import java.io.StringWriter;
 import java.util.ArrayList;
@@ -28,30 +29,36 @@ public class StringValueParsing {
      */
     public static String removeIndentation(String rawValue) {
         String[] lines = rawValue.split("\\n");
-        int minIndent = Integer.MAX_VALUE;
+        Integer commonIndent = null;
         for (int i = 0; i < lines.length; i++) {
-            if (i == 0) continue;
+            if (i == 0) {
+                continue;
+            }
             String line = lines[i];
             int length = line.length();
             int indent = leadingWhitespace(line);
-            if (indent < length && indent < minIndent) {
-                minIndent = indent;
+            if (indent < length) {
+                if (commonIndent == null || indent < commonIndent) {
+                    commonIndent = indent;
+                }
             }
         }
         List<String> lineList = new ArrayList<>(Arrays.asList(lines));
-        if (minIndent != Integer.MAX_VALUE) {
+        if (commonIndent != null) {
             for (int i = 0; i < lineList.size(); i++) {
                 String line = lineList.get(i);
-                if (i == 0) continue;
-                if (line.length() > minIndent) {
-                    line = line.substring(minIndent);
+                if (i == 0) {
+                    continue;
+                }
+                if (line.length() > commonIndent) {
+                    line = line.substring(commonIndent);
                     lineList.set(i, line);
                 }
             }
         }
         while (!lineList.isEmpty()) {
             String line = lineList.get(0);
-            if (line.isEmpty()) {
+            if (containsOnlyWhiteSpace(line)) {
                 lineList.remove(0);
             } else {
                 break;
@@ -60,7 +67,7 @@ public class StringValueParsing {
         while (!lineList.isEmpty()) {
             int endIndex = lineList.size() - 1;
             String line = lineList.get(endIndex);
-            if (line.isEmpty()) {
+            if (containsOnlyWhiteSpace(line)) {
                 lineList.remove(endIndex);
             } else {
                 break;
@@ -79,10 +86,10 @@ public class StringValueParsing {
         return formatted.toString();
     }
 
-    private static int leadingWhitespace(String line) {
+    private static int leadingWhitespace(String str) {
         int count = 0;
-        for (int i = 1; i < line.length(); i++) {
-            char ch = line.charAt(i);
+        for (int i = 0; i < str.length(); i++) {
+            char ch = str.charAt(i);
             if (ch != ' ' && ch != '\t') {
                 break;
             }
@@ -91,7 +98,12 @@ public class StringValueParsing {
         return count;
     }
 
-    public static String parseSingleQuotedString(String string) {
+    private static boolean containsOnlyWhiteSpace(String str) {
+        // according to graphql spec and graphql-js - this is the definition
+        return leadingWhitespace(str) == str.length();
+    }
+
+    public static String parseSingleQuotedString(String string, SourceLocation sourceLocation) {
         StringWriter writer = new StringWriter(string.length() - 2);
         int end = string.length() - 1;
         for (int i = 1; i < end; i++) {
@@ -128,15 +140,16 @@ public class StringValueParsing {
                     writer.write('\t');
                     continue;
                 case 'u':
-                    String hexStr = string.substring(i + 1, i + 5);
-                    int codepoint = Integer.parseInt(hexStr, 16);
-                    i += 4;
-                    writer.write(codepoint);
+                    i = UnicodeUtil.parseAndWriteUnicode(writer, string, i, sourceLocation);
                     continue;
                 default:
                     Assert.assertShouldNeverHappen();
             }
         }
         return writer.toString();
+    }
+
+    public static String parseSingleQuotedString(String string) {
+        return parseSingleQuotedString(string, null);
     }
 }

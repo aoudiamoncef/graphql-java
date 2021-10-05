@@ -1,12 +1,12 @@
 package graphql.schema;
 
 
-import graphql.Assert;
+import com.google.common.collect.ImmutableList;
 import graphql.PublicApi;
+import graphql.language.DirectiveDefinition;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -18,38 +18,40 @@ import java.util.function.UnaryOperator;
 import static graphql.Assert.assertNotNull;
 import static graphql.Assert.assertValidName;
 import static graphql.introspection.Introspection.DirectiveLocation;
-import static graphql.schema.GraphqlTypeComparators.sortGraphQLTypes;
 import static graphql.util.FpKit.getByName;
-import static graphql.util.FpKit.valuesToList;
 
 /**
  * A directive can be used to modify the behavior of a graphql field or type.
- *
+ * <p>
  * See http://graphql.org/learn/queries/#directives for more details on the concept.
  */
-@SuppressWarnings("DeprecatedIsStillUsed") // because the graphql spec still has some of these deprecated fields
 @PublicApi
-public class GraphQLDirective implements GraphQLType {
+public class GraphQLDirective implements GraphQLNamedSchemaElement {
 
     private final String name;
+    private final boolean repeatable;
     private final String description;
     private final EnumSet<DirectiveLocation> locations;
-    private final List<GraphQLArgument> arguments = new ArrayList<>();
-    private final boolean onOperation;
-    private final boolean onFragment;
-    private final boolean onField;
+    private final ImmutableList<GraphQLArgument> arguments;
+    private final DirectiveDefinition definition;
 
-    public GraphQLDirective(String name, String description, EnumSet<DirectiveLocation> locations,
-                            List<GraphQLArgument> arguments, boolean onOperation, boolean onFragment, boolean onField) {
+
+    public static final String CHILD_ARGUMENTS = "arguments";
+
+    private GraphQLDirective(String name,
+                             String description,
+                             boolean repeatable,
+                             EnumSet<DirectiveLocation> locations,
+                             List<GraphQLArgument> arguments,
+                             DirectiveDefinition definition) {
         assertValidName(name);
-        assertNotNull(arguments, "arguments can't be null");
+        assertNotNull(arguments, () -> "arguments can't be null");
         this.name = name;
         this.description = description;
+        this.repeatable = repeatable;
         this.locations = locations;
-        this.arguments.addAll(sortGraphQLTypes(arguments));
-        this.onOperation = onOperation;
-        this.onFragment = onFragment;
-        this.onField = onField;
+        this.arguments = ImmutableList.copyOf(arguments);
+        this.definition = definition;
     }
 
     @Override
@@ -57,59 +59,44 @@ public class GraphQLDirective implements GraphQLType {
         return name;
     }
 
+    public boolean isRepeatable() {
+        return repeatable;
+    }
+
+    public boolean isNonRepeatable() {
+        return !repeatable;
+    }
+
     public List<GraphQLArgument> getArguments() {
-        return new ArrayList<>(arguments);
+        return arguments;
     }
 
     public GraphQLArgument getArgument(String name) {
         for (GraphQLArgument argument : arguments) {
-            if (argument.getName().equals(name)) return argument;
+            if (argument.getName().equals(name)) {
+                return argument;
+            }
         }
         return null;
     }
 
     public EnumSet<DirectiveLocation> validLocations() {
-        return locations;
-    }
-
-    /**
-     * @return onOperation
-     *
-     * @deprecated Use {@link #validLocations()}
-     */
-    @Deprecated
-    public boolean isOnOperation() {
-        return onOperation;
-    }
-
-    /**
-     * @return onFragment
-     *
-     * @deprecated Use {@link #validLocations()}
-     */
-    @Deprecated
-    public boolean isOnFragment() {
-        return onFragment;
-    }
-
-    /**
-     * @return onField
-     *
-     * @deprecated Use {@link #validLocations()}
-     */
-    @Deprecated
-    public boolean isOnField() {
-        return onField;
+        return EnumSet.copyOf(locations);
     }
 
     public String getDescription() {
         return description;
     }
 
+    public DirectiveDefinition getDefinition() {
+        return definition;
+    }
+
     @Override
     public String toString() {
         return "GraphQLDirective{" +
                 "name='" + name + '\'' +
+                ", repeatable='" + repeatable + '\'' +
                 ", arguments=" + arguments +
                 ", locations=" + locations +
                 '}';
@@ -130,14 +117,51 @@ public class GraphQLDirective implements GraphQLType {
     }
 
     @Override
-    public TraversalControl accept(TraverserContext<GraphQLType> context, GraphQLTypeVisitor visitor) {
+    public GraphQLSchemaElement copy() {
+        return newDirective(this).build();
+    }
+
+
+    @Override
+    public TraversalControl accept(TraverserContext<GraphQLSchemaElement> context, GraphQLTypeVisitor visitor) {
         return visitor.visitGraphQLDirective(this, context);
     }
 
     @Override
-    public List<GraphQLType> getChildren() {
-        return new ArrayList<>(arguments);
+    public List<GraphQLSchemaElement> getChildren() {
+        return ImmutableList.copyOf(arguments);
     }
+
+    @Override
+    public SchemaElementChildrenContainer getChildrenWithTypeReferences() {
+        return SchemaElementChildrenContainer.newSchemaElementChildrenContainer()
+                .children(CHILD_ARGUMENTS, arguments)
+                .build();
+    }
+
+    @Override
+    public GraphQLDirective withNewChildren(SchemaElementChildrenContainer newChildren) {
+        return transform(builder ->
+                builder.replaceArguments(newChildren.getChildren(CHILD_ARGUMENTS))
+        );
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public final boolean equals(Object o) {
+        return super.equals(o);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public final int hashCode() {
+        return super.hashCode();
+    }
+
 
     public static Builder newDirective() {
         return new Builder();
@@ -147,37 +171,44 @@ public class GraphQLDirective implements GraphQLType {
         return new Builder(existing);
     }
 
-    public static class Builder {
+    public static class Builder extends GraphqlTypeBuilder {
 
-        private String name;
-        private String description;
-        private boolean onOperation;
-        private boolean onFragment;
-        private boolean onField;
         private EnumSet<DirectiveLocation> locations = EnumSet.noneOf(DirectiveLocation.class);
         private final Map<String, GraphQLArgument> arguments = new LinkedHashMap<>();
+        private DirectiveDefinition definition;
+        private boolean repeatable = false;
 
         public Builder() {
         }
 
-        @SuppressWarnings("deprecation")
         public Builder(GraphQLDirective existing) {
             this.name = existing.getName();
             this.description = existing.getDescription();
-            this.onOperation = existing.isOnOperation();
-            this.onFragment = existing.isOnFragment();
-            this.onField = existing.isOnField();
+            this.repeatable = existing.isRepeatable();
             this.locations = existing.validLocations();
             this.arguments.putAll(getByName(existing.getArguments(), GraphQLArgument::getName));
         }
 
+        @Override
         public Builder name(String name) {
-            this.name = name;
+            super.name(name);
             return this;
         }
 
+        @Override
         public Builder description(String description) {
-            this.description = description;
+            super.description(description);
+            return this;
+        }
+
+        public Builder repeatable(boolean repeatable) {
+            this.repeatable = repeatable;
+            return this;
+        }
+
+        @Override
+        public Builder comparatorRegistry(GraphqlTypeComparatorRegistry comparatorRegistry) {
+            super.comparatorRegistry(comparatorRegistry);
             return this;
         }
 
@@ -197,8 +228,17 @@ public class GraphQLDirective implements GraphQLType {
         }
 
         public Builder argument(GraphQLArgument argument) {
-            Assert.assertNotNull(argument, "argument must not be null");
+            assertNotNull(argument, () -> "argument must not be null");
             arguments.put(argument.getName(), argument);
+            return this;
+        }
+
+        public Builder replaceArguments(List<GraphQLArgument> arguments) {
+            assertNotNull(arguments, () -> "arguments must not be null");
+            this.arguments.clear();
+            for (GraphQLArgument argument : arguments) {
+                this.arguments.put(argument.getName(), argument);
+            }
             return this;
         }
 
@@ -244,47 +284,19 @@ public class GraphQLDirective implements GraphQLType {
         }
 
 
-        /**
-         * @param onOperation onOperation
-         *
-         * @return this builder
-         *
-         * @deprecated Use {@code graphql.schema.GraphQLDirective.Builder#validLocations(DirectiveLocation...)}
-         */
-        @Deprecated
-        public Builder onOperation(boolean onOperation) {
-            this.onOperation = onOperation;
-            return this;
-        }
-
-        /**
-         * @param onFragment onFragment
-         *
-         * @return this builder
-         *
-         * @deprecated Use {@code graphql.schema.GraphQLDirective.Builder#validLocations(DirectiveLocation...)}
-         */
-        @Deprecated
-        public Builder onFragment(boolean onFragment) {
-            this.onFragment = onFragment;
-            return this;
-        }
-
-        /**
-         * @param onField onField
-         *
-         * @return this builder
-         *
-         * @deprecated Use {@code graphql.schema.GraphQLDirective.Builder#validLocations(DirectiveLocation...)}
-         */
-        @Deprecated
-        public Builder onField(boolean onField) {
-            this.onField = onField;
+        public Builder definition(DirectiveDefinition definition) {
+            this.definition = definition;
             return this;
         }
 
         public GraphQLDirective build() {
-            return new GraphQLDirective(name, description, locations, valuesToList(arguments), onOperation, onFragment, onField);
+            return new GraphQLDirective(
+                    name,
+                    description,
+                    repeatable,
+                    locations,
+                    sort(arguments, GraphQLDirective.class, GraphQLArgument.class),
+                    definition);
         }
 
 

@@ -1,5 +1,6 @@
 package graphql.execution;
 
+import com.google.common.collect.ImmutableList;
 import graphql.ExecutionResult;
 import graphql.ExecutionResultImpl;
 import graphql.GraphQLError;
@@ -9,6 +10,8 @@ import graphql.SerializationError;
 import graphql.TrivialDataFetcher;
 import graphql.TypeMismatchError;
 import graphql.UnresolvedTypeError;
+import graphql.execution.directives.QueryDirectives;
+import graphql.execution.directives.QueryDirectivesImpl;
 import graphql.execution.instrumentation.Instrumentation;
 import graphql.execution.instrumentation.InstrumentationContext;
 import graphql.execution.instrumentation.parameters.InstrumentationFieldCompleteParameters;
@@ -17,11 +20,14 @@ import graphql.execution.instrumentation.parameters.InstrumentationFieldParamete
 import graphql.introspection.Introspection;
 import graphql.language.Argument;
 import graphql.language.Field;
+import graphql.normalized.ExecutableNormalizedField;
+import graphql.normalized.ExecutableNormalizedOperation;
 import graphql.schema.CoercingSerializeException;
 import graphql.schema.DataFetcher;
 import graphql.schema.DataFetchingEnvironment;
 import graphql.schema.DataFetchingFieldSelectionSet;
 import graphql.schema.DataFetchingFieldSelectionSetImpl;
+import graphql.schema.GraphQLArgument;
 import graphql.schema.GraphQLCodeRegistry;
 import graphql.schema.GraphQLEnumType;
 import graphql.schema.GraphQLFieldDefinition;
@@ -31,16 +37,19 @@ import graphql.schema.GraphQLScalarType;
 import graphql.schema.GraphQLSchema;
 import graphql.schema.GraphQLType;
 import graphql.util.FpKit;
+import graphql.util.LogKit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static graphql.execution.Async.exceptionallyCompletedFuture;
 import static graphql.execution.ExecutionStepInfo.newExecutionStepInfo;
@@ -51,7 +60,9 @@ import static graphql.execution.FieldValueInfo.CompleteValueType.NULL;
 import static graphql.execution.FieldValueInfo.CompleteValueType.OBJECT;
 import static graphql.execution.FieldValueInfo.CompleteValueType.SCALAR;
 import static graphql.schema.DataFetchingEnvironmentImpl.newDataFetchingEnvironment;
+import static graphql.schema.GraphQLTypeUtil.isEnum;
 import static graphql.schema.GraphQLTypeUtil.isList;
+import static graphql.schema.GraphQLTypeUtil.isScalar;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 /**
@@ -112,10 +123,11 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 public abstract class ExecutionStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(ExecutionStrategy.class);
+    private static final Logger logNotSafe = LogKit.getNotPrivacySafeLogger(ExecutionStrategy.class);
 
     protected final ValuesResolver valuesResolver = new ValuesResolver();
     protected final FieldCollector fieldCollector = new FieldCollector();
-    private final ExecutionStepInfoFactory executionStepInfoFactory = new ExecutionStepInfoFactory();
+    protected final ExecutionStepInfoFactory executionStepInfoFactory = new ExecutionStepInfoFactory();
     private final ResolveType resolvedType = new ResolveType();
 
     protected final DataFetcherExceptionHandler dataFetcherExceptionHandler;
@@ -188,10 +200,11 @@ public abstract class ExecutionStrategy {
      */
     protected CompletableFuture<FieldValueInfo> resolveFieldWithInfo(ExecutionContext executionContext, ExecutionStrategyParameters parameters) {
         GraphQLFieldDefinition fieldDef = getFieldDef(executionContext, parameters, parameters.getField().getSingleField());
+        Supplier<ExecutionStepInfo> executionStepInfo = FpKit.intraThreadMemoize(() -> createExecutionStepInfo(executionContext, parameters, fieldDef, null));
 
         Instrumentation instrumentation = executionContext.getInstrumentation();
         InstrumentationContext<ExecutionResult> fieldCtx = instrumentation.beginField(
-                new InstrumentationFieldParameters(executionContext, fieldDef, createExecutionStepInfo(executionContext, parameters, fieldDef, null))
+                new InstrumentationFieldParameters(executionContext, executionStepInfo)
         );
 
         CompletableFuture<FetchedValue> fetchFieldFuture = fetchField(executionContext, parameters);
@@ -225,11 +238,19 @@ public abstract class ExecutionStrategy {
         GraphQLFieldDefinition fieldDef = getFieldDef(executionContext.getGraphQLSchema(), parentType, field.getSingleField());
 
         GraphQLCodeRegistry codeRegistry = executionContext.getGraphQLSchema().getCodeRegistry();
-        Map<String, Object> argumentValues = valuesResolver.getArgumentValues(codeRegistry, fieldDef.getArguments(), field.getArguments(), executionContext.getVariables());
-
         GraphQLOutputType fieldType = fieldDef.getType();
-        DataFetchingFieldSelectionSet fieldCollector = DataFetchingFieldSelectionSetImpl.newCollector(executionContext, fieldType, parameters.getField());
-        ExecutionStepInfo executionStepInfo = createExecutionStepInfo(executionContext, parameters, fieldDef, parentType);
+
+        // if the DF (like PropertyDataFetcher) does not use the arguments of execution step info then dont build any
+        Supplier<ExecutionStepInfo> executionStepInfo = FpKit.intraThreadMemoize(
+                () -> createExecutionStepInfo(executionContext, parameters, fieldDef, parentType));
+        Supplier<Map<String, Object>> argumentValues = () -> executionStepInfo.get().getArguments();
+
+        Supplier<ExecutableNormalizedField> normalizedFieldSupplier = getNormalizedField(executionContext, parameters, executionStepInfo);
+
+        // DataFetchingFieldSelectionSet and QueryDirectives is a supplier of sorts - eg a lazy pattern
+        DataFetchingFieldSelectionSet fieldCollector = DataFetchingFieldSelectionSetImpl.newCollector(executionContext.getGraphQLSchema(), fieldType, normalizedFieldSupplier);
+        QueryDirectives queryDirectives = new QueryDirectivesImpl(field, executionContext.getGraphQLSchema(), executionContext.getVariables());
+
 
         DataFetchingEnvironment environment = newDataFetchingEnvironment(executionContext)
                 .source(parameters.getSource())
@@ -241,26 +262,26 @@ public abstract class ExecutionStrategy {
                 .executionStepInfo(executionStepInfo)
                 .parentType(parentType)
                 .selectionSet(fieldCollector)
+                .queryDirectives(queryDirectives)
                 .build();
 
-        DataFetcher dataFetcher = codeRegistry.getDataFetcher(parentType, fieldDef);
+        DataFetcher<?> dataFetcher = codeRegistry.getDataFetcher(parentType, fieldDef);
 
         Instrumentation instrumentation = executionContext.getInstrumentation();
 
-        InstrumentationFieldFetchParameters instrumentationFieldFetchParams = new InstrumentationFieldFetchParameters(executionContext, fieldDef, environment, parameters, dataFetcher instanceof TrivialDataFetcher);
+        InstrumentationFieldFetchParameters instrumentationFieldFetchParams = new InstrumentationFieldFetchParameters(executionContext, environment, parameters, dataFetcher instanceof TrivialDataFetcher);
         InstrumentationContext<Object> fetchCtx = instrumentation.beginFieldFetch(instrumentationFieldFetchParams);
 
         CompletableFuture<Object> fetchedValue;
         dataFetcher = instrumentation.instrumentDataFetcher(dataFetcher, instrumentationFieldFetchParams);
         ExecutionId executionId = executionContext.getExecutionId();
         try {
-            log.debug("'{}' fetching field '{}' using data fetcher '{}'...", executionId, executionStepInfo.getPath(), dataFetcher.getClass().getName());
             Object fetchedValueRaw = dataFetcher.get(environment);
-            log.debug("'{}' field '{}' fetch returned '{}'", executionId, executionStepInfo.getPath(), fetchedValueRaw == null ? "null" : fetchedValueRaw.getClass().getName());
-
             fetchedValue = Async.toCompletableFuture(fetchedValueRaw);
         } catch (Exception e) {
-            log.debug(String.format("'%s', field '%s' fetch threw exception", executionId, executionStepInfo.getPath()), e);
+            if (logNotSafe.isDebugEnabled()) {
+                logNotSafe.debug(String.format("'%s', field '%s' fetch threw exception", executionId, executionStepInfo.get().getPath()), e);
+            }
 
             fetchedValue = new CompletableFuture<>();
             fetchedValue.completeExceptionally(e);
@@ -270,29 +291,27 @@ public abstract class ExecutionStrategy {
                 .handle((result, exception) -> {
                     fetchCtx.onCompleted(result, exception);
                     if (exception != null) {
-                        handleFetchingException(executionContext, parameters, environment, exception);
-                        return null;
+                        return handleFetchingException(executionContext, environment, exception);
                     } else {
-                        return result;
+                        return CompletableFuture.completedFuture(result);
                     }
                 })
+                .thenCompose(Function.identity())
                 .thenApply(result -> unboxPossibleDataFetcherResult(executionContext, parameters, result));
     }
 
-    FetchedValue unboxPossibleDataFetcherResult(ExecutionContext executionContext,
-                                                ExecutionStrategyParameters parameters,
-                                                Object result) {
+    protected Supplier<ExecutableNormalizedField> getNormalizedField(ExecutionContext executionContext, ExecutionStrategyParameters parameters, Supplier<ExecutionStepInfo> executionStepInfo) {
+        Supplier<ExecutableNormalizedOperation> normalizedQuery = executionContext.getNormalizedQueryTree();
+        return () -> normalizedQuery.get().getNormalizedField(parameters.getField(), executionStepInfo.get().getObjectType(), executionStepInfo.get().getPath());
+    }
+
+    protected FetchedValue unboxPossibleDataFetcherResult(ExecutionContext executionContext,
+                                                          ExecutionStrategyParameters parameters,
+                                                          Object result) {
 
         if (result instanceof DataFetcherResult) {
-            //noinspection unchecked
-            DataFetcherResult<?> dataFetcherResult = (DataFetcherResult) result;
-            if (dataFetcherResult.isMapRelativeErrors()) {
-                dataFetcherResult.getErrors().stream()
-                        .map(relError -> new AbsoluteGraphQLError(parameters, relError))
-                        .forEach(executionContext::addError);
-            } else {
-                dataFetcherResult.getErrors().forEach(executionContext::addError);
-            }
+            DataFetcherResult<?> dataFetcherResult = (DataFetcherResult<?>) result;
+            executionContext.addErrors(dataFetcherResult.getErrors());
 
             Object localContext = dataFetcherResult.getLocalContext();
             if (localContext == null) {
@@ -300,32 +319,44 @@ public abstract class ExecutionStrategy {
                 localContext = parameters.getLocalContext();
             }
             return FetchedValue.newFetchedValue()
-                    .fetchedValue(UnboxPossibleOptional.unboxPossibleOptional(dataFetcherResult.getData()))
+                    .fetchedValue(executionContext.getValueUnboxer().unbox(dataFetcherResult.getData()))
                     .rawFetchedValue(dataFetcherResult.getData())
                     .errors(dataFetcherResult.getErrors())
                     .localContext(localContext)
                     .build();
         } else {
             return FetchedValue.newFetchedValue()
-                    .fetchedValue(UnboxPossibleOptional.unboxPossibleOptional(result))
+                    .fetchedValue(executionContext.getValueUnboxer().unbox(result))
                     .rawFetchedValue(result)
+                    .localContext(parameters.getLocalContext())
                     .build();
         }
     }
 
-    private void handleFetchingException(ExecutionContext executionContext,
-                                         ExecutionStrategyParameters parameters,
-                                         DataFetchingEnvironment environment,
-                                         Throwable e) {
+    protected <T> CompletableFuture<T> handleFetchingException(ExecutionContext executionContext,
+                                                               DataFetchingEnvironment environment,
+                                                               Throwable e) {
         DataFetcherExceptionHandlerParameters handlerParameters = DataFetcherExceptionHandlerParameters.newExceptionParameters()
                 .dataFetchingEnvironment(environment)
                 .exception(e)
                 .build();
 
-        DataFetcherExceptionHandlerResult handlerResult = dataFetcherExceptionHandler.onException(handlerParameters);
-        handlerResult.getErrors().forEach(executionContext::addError);
+        try {
+            return asyncHandleException(dataFetcherExceptionHandler, handlerParameters, executionContext);
+        } catch (Exception handlerException) {
+            handlerParameters = DataFetcherExceptionHandlerParameters.newExceptionParameters()
+                    .dataFetchingEnvironment(environment)
+                    .exception(handlerException)
+                    .build();
+            return asyncHandleException(new SimpleDataFetcherExceptionHandler(), handlerParameters, executionContext);
+        }
+    }
 
-        parameters.deferredErrorSupport().onFetchingException(parameters, e);
+    private <T> CompletableFuture<T> asyncHandleException(DataFetcherExceptionHandler handler, DataFetcherExceptionHandlerParameters handlerParameters, ExecutionContext executionContext) {
+        //noinspection unchecked
+        return  handler.handleException(handlerParameters)
+            .thenApply(handlerResult -> (T) DataFetcherResult.<FetchedValue>newResult().errors(handlerResult.getErrors()).build()
+            );
     }
 
     /**
@@ -352,25 +383,23 @@ public abstract class ExecutionStrategy {
         ExecutionStepInfo executionStepInfo = createExecutionStepInfo(executionContext, parameters, fieldDef, parentType);
 
         Instrumentation instrumentation = executionContext.getInstrumentation();
-        InstrumentationFieldCompleteParameters instrumentationParams = new InstrumentationFieldCompleteParameters(executionContext, parameters, fieldDef, executionStepInfo, fetchedValue);
+        InstrumentationFieldCompleteParameters instrumentationParams = new InstrumentationFieldCompleteParameters(executionContext, parameters, () -> executionStepInfo, fetchedValue);
         InstrumentationContext<ExecutionResult> ctxCompleteField = instrumentation.beginFieldComplete(
                 instrumentationParams
         );
-
-        GraphQLCodeRegistry codeRegistry = executionContext.getGraphQLSchema().getCodeRegistry();
-        Map<String, Object> argumentValues = valuesResolver.getArgumentValues(codeRegistry, fieldDef.getArguments(), field.getArguments(), executionContext.getVariables());
 
         NonNullableFieldValidator nonNullableFieldValidator = new NonNullableFieldValidator(executionContext, executionStepInfo);
 
         ExecutionStrategyParameters newParameters = parameters.transform(builder ->
                 builder.executionStepInfo(executionStepInfo)
-                        .arguments(argumentValues)
                         .source(fetchedValue.getFetchedValue())
                         .localContext(fetchedValue.getLocalContext())
                         .nonNullFieldValidator(nonNullableFieldValidator)
         );
 
-        log.debug("'{}' completing field '{}'...", executionContext.getExecutionId(), executionStepInfo.getPath());
+        if (log.isDebugEnabled()) {
+            log.debug("'{}' completing field '{}'...", executionContext.getExecutionId(), executionStepInfo.getPath());
+        }
 
         FieldValueInfo fieldValueInfo = completeValue(executionContext, newParameters);
 
@@ -399,19 +428,19 @@ public abstract class ExecutionStrategy {
      */
     protected FieldValueInfo completeValue(ExecutionContext executionContext, ExecutionStrategyParameters parameters) throws NonNullableFieldWasNullException {
         ExecutionStepInfo executionStepInfo = parameters.getExecutionStepInfo();
-        Object result = UnboxPossibleOptional.unboxPossibleOptional(parameters.getSource());
+        Object result = executionContext.getValueUnboxer().unbox(parameters.getSource());
         GraphQLType fieldType = executionStepInfo.getUnwrappedNonNullType();
         CompletableFuture<ExecutionResult> fieldValue;
 
         if (result == null) {
-            fieldValue = completeValueForNull(parameters);
+            fieldValue = completeValueForNull(executionContext, parameters);
             return FieldValueInfo.newFieldValueInfo(NULL).fieldValue(fieldValue).build();
         } else if (isList(fieldType)) {
             return completeValueForList(executionContext, parameters, result);
-        } else if (fieldType instanceof GraphQLScalarType) {
+        } else if (isScalar(fieldType)) {
             fieldValue = completeValueForScalar(executionContext, parameters, (GraphQLScalarType) fieldType, result);
             return FieldValueInfo.newFieldValueInfo(SCALAR).fieldValue(fieldValue).build();
-        } else if (fieldType instanceof GraphQLEnumType) {
+        } else if (isEnum(fieldType)) {
             fieldValue = completeValueForEnum(executionContext, parameters, (GraphQLEnumType) fieldType, result);
             return FieldValueInfo.newFieldValueInfo(ENUM).fieldValue(fieldValue).build();
         }
@@ -436,13 +465,12 @@ public abstract class ExecutionStrategy {
 
     private void handleUnresolvedTypeProblem(ExecutionContext context, ExecutionStrategyParameters parameters, UnresolvedTypeException e) {
         UnresolvedTypeError error = new UnresolvedTypeError(parameters.getPath(), parameters.getExecutionStepInfo(), e);
-        log.warn(error.getMessage(), e);
+        logNotSafe.warn(error.getMessage(), e);
         context.addError(error);
 
-        parameters.deferredErrorSupport().onError(error);
     }
 
-    private CompletableFuture<ExecutionResult> completeValueForNull(ExecutionStrategyParameters parameters) {
+    protected CompletableFuture<ExecutionResult> completeValueForNull(ExecutionContext executionContext, ExecutionStrategyParameters parameters) {
         return Async.tryCatch(() -> {
             Object nullValue = parameters.getNonNullFieldValidator().validate(parameters.getPath(), null);
             return completedFuture(new ExecutionResultImpl(nullValue, null));
@@ -484,35 +512,36 @@ public abstract class ExecutionStrategy {
      */
     protected FieldValueInfo completeValueForList(ExecutionContext executionContext, ExecutionStrategyParameters parameters, Iterable<Object> iterableValues) {
 
-        Collection<Object> values = FpKit.toCollection(iterableValues);
+        OptionalInt size = FpKit.toSize(iterableValues);
         ExecutionStepInfo executionStepInfo = parameters.getExecutionStepInfo();
-        GraphQLFieldDefinition fieldDef = parameters.getExecutionStepInfo().getFieldDefinition();
-        GraphQLObjectType fieldContainer = parameters.getExecutionStepInfo().getFieldContainer();
 
-        InstrumentationFieldCompleteParameters instrumentationParams = new InstrumentationFieldCompleteParameters(executionContext, parameters, fieldDef, createExecutionStepInfo(executionContext, parameters, fieldDef, fieldContainer), values);
+        InstrumentationFieldCompleteParameters instrumentationParams = new InstrumentationFieldCompleteParameters(executionContext, parameters, () -> executionStepInfo, iterableValues);
         Instrumentation instrumentation = executionContext.getInstrumentation();
 
         InstrumentationContext<ExecutionResult> completeListCtx = instrumentation.beginFieldListComplete(
                 instrumentationParams
         );
 
-        List<FieldValueInfo> fieldValueInfos = new ArrayList<>();
+        List<FieldValueInfo> fieldValueInfos = new ArrayList<>(size.orElse(1));
         int index = 0;
-        for (Object item : values) {
-            ExecutionPath indexedPath = parameters.getPath().segment(index);
+        for (Object item : iterableValues) {
+            ResultPath indexedPath = parameters.getPath().segment(index);
 
             ExecutionStepInfo stepInfoForListElement = executionStepInfoFactory.newExecutionStepInfoForListElement(executionStepInfo, index);
 
             NonNullableFieldValidator nonNullableFieldValidator = new NonNullableFieldValidator(executionContext, stepInfoForListElement);
 
             int finalIndex = index;
+            FetchedValue value = unboxPossibleDataFetcherResult(executionContext, parameters, item);
+
             ExecutionStrategyParameters newParameters = parameters.transform(builder ->
                     builder.executionStepInfo(stepInfoForListElement)
                             .nonNullFieldValidator(nonNullableFieldValidator)
-                            .listSize(values.size())
+                            .listSize(size.orElse(-1)) // -1 signals that we don't know the size
+                            .localContext(value.getLocalContext())
                             .currentListIndex(finalIndex)
                             .path(indexedPath)
-                            .source(item)
+                            .source(value.getFetchedValue())
             );
             fieldValueInfos.add(completeValue(executionContext, newParameters));
             index++;
@@ -529,7 +558,7 @@ public abstract class ExecutionStrategy {
                 completeListCtx.onCompleted(executionResult, exception);
                 return;
             }
-            List<Object> completedResults = new ArrayList<>();
+            List<Object> completedResults = new ArrayList<>(results.size());
             for (ExecutionResult completedValue : results) {
                 completedResults.add(completedValue.getData());
             }
@@ -589,7 +618,7 @@ public abstract class ExecutionStrategy {
     protected CompletableFuture<ExecutionResult> completeValueForEnum(ExecutionContext executionContext, ExecutionStrategyParameters parameters, GraphQLEnumType enumType, Object result) {
         Object serialized;
         try {
-            serialized = enumType.getCoercing().serialize(result);
+            serialized = enumType.serialize(result);
         } catch (CoercingSerializeException e) {
             serialized = handleCoercionProblem(executionContext, parameters, e);
         }
@@ -641,10 +670,9 @@ public abstract class ExecutionStrategy {
     @SuppressWarnings("SameReturnValue")
     private Object handleCoercionProblem(ExecutionContext context, ExecutionStrategyParameters parameters, CoercingSerializeException e) {
         SerializationError error = new SerializationError(parameters.getPath(), e);
-        log.warn(error.getMessage(), e);
+        logNotSafe.warn(error.getMessage(), e);
         context.addError(error);
 
-        parameters.deferredErrorSupport().onError(error);
 
         return null;
     }
@@ -659,31 +687,29 @@ public abstract class ExecutionStrategy {
      *
      * @throws java.lang.ClassCastException if its not an Iterable
      */
-    @SuppressWarnings("unchecked")
     protected Iterable<Object> toIterable(Object result) {
-        return FpKit.toCollection(result);
+        return FpKit.toIterable(result);
     }
 
     protected GraphQLObjectType resolveType(ExecutionContext executionContext, ExecutionStrategyParameters parameters, GraphQLType fieldType) {
-        return resolvedType.resolveType(executionContext, parameters.getField(), parameters.getSource(), parameters.getArguments(), fieldType);
+        return resolvedType.resolveType(executionContext, parameters.getField(), parameters.getSource(), parameters.getExecutionStepInfo().getArguments(), fieldType);
     }
 
 
     protected Iterable<Object> toIterable(ExecutionContext context, ExecutionStrategyParameters parameters, Object result) {
-        if (result.getClass().isArray() || result instanceof Iterable) {
-            return toIterable(result);
+        if (FpKit.isIterable(result)) {
+            return FpKit.toIterable(result);
         }
 
         handleTypeMismatchProblem(context, parameters, result);
         return null;
     }
 
+
     private void handleTypeMismatchProblem(ExecutionContext context, ExecutionStrategyParameters parameters, Object result) {
         TypeMismatchError error = new TypeMismatchError(parameters.getPath(), parameters.getExecutionStepInfo().getUnwrappedNonNullType());
-        log.warn("{} got {}", error.getMessage(), result.getClass());
+        logNotSafe.warn("{} got {}", error.getMessage(), result.getClass());
         context.addError(error);
-
-        parameters.deferredErrorSupport().onError(error);
     }
 
 
@@ -744,7 +770,7 @@ public abstract class ExecutionStrategy {
 
     protected ExecutionResult handleNonNullException(ExecutionContext executionContext, CompletableFuture<ExecutionResult> result, Throwable e) {
         ExecutionResult executionResult = null;
-        List<GraphQLError> errors = new ArrayList<>(executionContext.getErrors());
+        List<GraphQLError> errors = ImmutableList.copyOf(executionContext.getErrors());
         Throwable underlyingException = e;
         if (e instanceof CompletionException) {
             underlyingException = e.getCause();
@@ -772,7 +798,7 @@ public abstract class ExecutionStrategy {
      * @param executionContext the execution context  in play
      * @param parameters       contains the parameters holding the fields to be executed and source object
      * @param fieldDefinition  the field definition to build type info for
-     * @param fieldContainer  the field container
+     * @param fieldContainer   the field container
      *
      * @return a new type info
      */
@@ -780,21 +806,30 @@ public abstract class ExecutionStrategy {
                                                         ExecutionStrategyParameters parameters,
                                                         GraphQLFieldDefinition fieldDefinition,
                                                         GraphQLObjectType fieldContainer) {
+        MergedField field = parameters.getField();
+        ExecutionStepInfo parentStepInfo = parameters.getExecutionStepInfo();
         GraphQLOutputType fieldType = fieldDefinition.getType();
-        List<Argument> fieldArgs = parameters.getField().getArguments();
-        GraphQLCodeRegistry codeRegistry = executionContext.getGraphQLSchema().getCodeRegistry();
-        Map<String, Object> argumentValues = valuesResolver.getArgumentValues(codeRegistry, fieldDefinition.getArguments(), fieldArgs, executionContext.getVariables());
+        List<GraphQLArgument> fieldArgDefs = fieldDefinition.getArguments();
+        Map<String, Object> argumentValues = Collections.emptyMap();
+        //
+        // no need to create args at all if there are none on the field def
+        //
+        if (!fieldArgDefs.isEmpty()) {
+            List<Argument> fieldArgs = field.getArguments();
+            GraphQLCodeRegistry codeRegistry = executionContext.getGraphQLSchema().getCodeRegistry();
+            argumentValues = valuesResolver.getArgumentValues(codeRegistry, fieldArgDefs, fieldArgs, executionContext.getVariables());
+        }
+
 
         return newExecutionStepInfo()
                 .type(fieldType)
                 .fieldDefinition(fieldDefinition)
                 .fieldContainer(fieldContainer)
-                .field(parameters.getField())
+                .field(field)
                 .path(parameters.getPath())
-                .parentInfo(parameters.getExecutionStepInfo())
+                .parentInfo(parentStepInfo)
                 .arguments(argumentValues)
                 .build();
-
     }
 
 
@@ -812,6 +847,6 @@ public abstract class ExecutionStrategy {
     @Internal
     public static String mkNameForPath(List<Field> currentField) {
         Field field = currentField.get(0);
-        return field.getAlias() != null ? field.getAlias() : field.getName();
+        return field.getResultKey();
     }
 }

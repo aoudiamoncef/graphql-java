@@ -1,6 +1,7 @@
 package graphql.execution.preparsed;
 
 import graphql.GraphQLError;
+import graphql.PublicApi;
 import graphql.language.Document;
 
 import java.io.Serializable;
@@ -11,13 +12,14 @@ import static java.util.Collections.singletonList;
 
 /**
  * An instance of a preparsed document entry represents the result of a query parse and validation, like
- * an either implementation it contains either the correct result in th document property or the errors.
+ * an either implementation it contains either the correct result in the document property or the errors.
  *
  * NOTE: This class implements {@link java.io.Serializable} and hence it can be serialised and placed into a distributed cache.  However we
  * are not aiming to provide long term compatibility and do not intend for you to place this serialised data into permanent storage,
  * with times frames that cross graphql-java versions.  While we don't change things unnecessarily,  we may inadvertently break
  * the serialised compatibility across versions.
  */
+@PublicApi
 public class PreparsedDocumentEntry implements Serializable {
     private final Document document;
     private final List<? extends GraphQLError> errors;

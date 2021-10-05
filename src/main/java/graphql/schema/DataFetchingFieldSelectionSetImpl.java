@@ -1,49 +1,39 @@
 package graphql.schema;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import graphql.Internal;
-import graphql.execution.ExecutionContext;
-import graphql.execution.FieldCollector;
-import graphql.execution.FieldCollectorParameters;
-import graphql.execution.MergedField;
-import graphql.execution.MergedSelectionSet;
-import graphql.execution.ValuesResolver;
-import graphql.introspection.Introspection;
-import graphql.language.Field;
-import graphql.language.FragmentDefinition;
+import graphql.normalized.ExecutableNormalizedField;
 
+import java.io.File;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.util.FpKit.newList;
 import static java.util.Collections.emptyList;
-import static java.util.Collections.emptyMap;
 
 @Internal
 public class DataFetchingFieldSelectionSetImpl implements DataFetchingFieldSelectionSet {
 
+    private final static String SEP = "/";
+    private final static boolean UNIXY = SEP.equals(File.separator);
+
     private final static DataFetchingFieldSelectionSet NOOP = new DataFetchingFieldSelectionSet() {
-        @Override
-        public MergedSelectionSet get() {
-            return MergedSelectionSet.newMergedSelectionSet().build();
-        }
-
-        @Override
-        public Map<String, Map<String, Object>> getArguments() {
-            return emptyMap();
-        }
-
-        @Override
-        public Map<String, GraphQLFieldDefinition> getDefinitions() {
-            return emptyMap();
-        }
 
         @Override
         public boolean contains(String fieldGlobPattern) {
@@ -51,9 +41,15 @@ public class DataFetchingFieldSelectionSetImpl implements DataFetchingFieldSelec
         }
 
         @Override
-        public SelectedField getField(String fieldName) {
-            return null;
+        public boolean containsAnyOf(String fieldGlobPattern, String... fieldGlobPatterns) {
+            return false;
         }
+
+        @Override
+        public boolean containsAllOf(String fieldGlobPattern, String... fieldGlobPatterns) {
+            return false;
+        }
+
 
         @Override
         public List<SelectedField> getFields() {
@@ -61,68 +57,50 @@ public class DataFetchingFieldSelectionSetImpl implements DataFetchingFieldSelec
         }
 
         @Override
-        public List<SelectedField> getFields(String fieldGlobPattern) {
+        public List<SelectedField> getImmediateFields() {
             return emptyList();
+        }
+
+        @Override
+        public List<SelectedField> getFields(String fieldGlobPattern, String... fieldGlobPatterns) {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public Map<String, List<SelectedField>> getFieldsGroupedByResultKey() {
+            return Collections.emptyMap();
+        }
+
+        @Override
+        public Map<String, List<SelectedField>> getFieldsGroupedByResultKey(String fieldGlobPattern, String... fieldGlobPatterns) {
+            return Collections.emptyMap();
         }
     };
 
-    public static DataFetchingFieldSelectionSet newCollector(ExecutionContext executionContext, GraphQLType fieldType, MergedField mergedField) {
-        GraphQLType unwrappedType = GraphQLTypeUtil.unwrapAll(fieldType);
-        if (unwrappedType instanceof GraphQLFieldsContainer) {
-            return new DataFetchingFieldSelectionSetImpl(executionContext, (GraphQLFieldsContainer) unwrappedType, mergedField);
+    public static DataFetchingFieldSelectionSet newCollector(GraphQLSchema schema, GraphQLOutputType fieldType, Supplier<ExecutableNormalizedField> normalizedFieldSupplier) {
+        if (!GraphQLTypeUtil.isLeaf(fieldType)) {
+            return new DataFetchingFieldSelectionSetImpl(normalizedFieldSupplier, schema);
         } else {
-            // we can only collect fields on object types and interfaces.  Scalars, Unions etc... cant be done.
+            // we can only collect fields on object types and interfaces and unions.
             return NOOP;
         }
     }
 
-    private static GraphQLObjectType asObjectTypeOrNull(GraphQLType unwrappedType) {
-        return unwrappedType instanceof GraphQLObjectType ? (GraphQLObjectType) unwrappedType : null;
-    }
+    private final Supplier<ExecutableNormalizedField> normalizedFieldSupplier;
 
-    private final FieldCollector fieldCollector = new FieldCollector();
-    private final ValuesResolver valuesResolver = new ValuesResolver();
+    private volatile boolean computedValues;
+    // we have multiple entries in this map so that we can do glob matching in multiple ways
+    // however it needs to be normalised back to a set of unique fields when give back out to
+    // the caller.
+    private Map<String, List<SelectedField>> normalisedSelectionSetFields;
+    private List<SelectedField> immediateFields;
+    private Set<String> flattenedFieldsForGlobSearching;
+    private final GraphQLSchema schema;
 
-    private final MergedField parentFields;
-    private final GraphQLSchema graphQLSchema;
-    private final GraphQLFieldsContainer parentFieldType;
-    private final Map<String, Object> variables;
-    private final Map<String, FragmentDefinition> fragmentsByName;
-
-    private Map<String, MergedField> selectionSetFields;
-    private Map<String, GraphQLFieldDefinition> selectionSetFieldDefinitions;
-    private Map<String, Map<String, Object>> selectionSetFieldArgs;
-    private Set<String> flattenedFields;
-
-    private DataFetchingFieldSelectionSetImpl(ExecutionContext executionContext, GraphQLFieldsContainer parentFieldType, MergedField parentFields) {
-        this(parentFields, parentFieldType, executionContext.getGraphQLSchema(), executionContext.getVariables(), executionContext.getFragmentsByName());
-    }
-
-    public DataFetchingFieldSelectionSetImpl(MergedField parentFields, GraphQLFieldsContainer parentFieldType, GraphQLSchema graphQLSchema, Map<String, Object> variables, Map<String, FragmentDefinition> fragmentsByName) {
-        this.parentFields = parentFields;
-        this.graphQLSchema = graphQLSchema;
-        this.parentFieldType = parentFieldType;
-        this.variables = variables;
-        this.fragmentsByName = fragmentsByName;
-    }
-
-    @Override
-    public MergedSelectionSet get() {
-        // by having a .get() method we get lazy evaluation.
-        computeValuesLazily();
-        return MergedSelectionSet.newMergedSelectionSet().subFields(selectionSetFields).build();
-    }
-
-    @Override
-    public Map<String, Map<String, Object>> getArguments() {
-        computeValuesLazily();
-        return selectionSetFieldArgs;
-    }
-
-    @Override
-    public Map<String, GraphQLFieldDefinition> getDefinitions() {
-        computeValuesLazily();
-        return selectionSetFieldDefinitions;
+    private DataFetchingFieldSelectionSetImpl(Supplier<ExecutableNormalizedField> normalizedFieldSupplier, GraphQLSchema schema) {
+        this.schema = schema;
+        this.normalizedFieldSupplier = normalizedFieldSupplier;
+        this.computedValues = false;
     }
 
     @Override
@@ -131,8 +109,10 @@ public class DataFetchingFieldSelectionSetImpl implements DataFetchingFieldSelec
             return false;
         }
         computeValuesLazily();
+        fieldGlobPattern = removeLeadingSlash(fieldGlobPattern);
         PathMatcher globMatcher = globMatcher(fieldGlobPattern);
-        for (String flattenedField : flattenedFields) {
+        for (String flattenedField : flattenedFieldsForGlobSearching) {
+            flattenedField = osAppropriate(flattenedField);
             Path path = Paths.get(flattenedField);
             if (globMatcher.matches(path)) {
                 return true;
@@ -141,72 +121,205 @@ public class DataFetchingFieldSelectionSetImpl implements DataFetchingFieldSelec
         return false;
     }
 
-    @Override
-    public SelectedField getField(String fqFieldName) {
-        computeValuesLazily();
-
-        MergedField fields = selectionSetFields.get(fqFieldName);
-        if (fields == null) {
-            return null;
+    private String osAppropriate(String flattenedField) {
+        if (UNIXY) {
+            return flattenedField;
+        } else {
+            return flattenedField.replace(SEP, "\\");
         }
-        GraphQLFieldDefinition fieldDefinition = selectionSetFieldDefinitions.get(fqFieldName);
-        Map<String, Object> arguments = selectionSetFieldArgs.get(fqFieldName);
-        arguments = arguments == null ? emptyMap() : arguments;
-        return new SelectedFieldImpl(fqFieldName, fields, fieldDefinition, arguments);
     }
 
     @Override
-    public List<SelectedField> getFields(String fieldGlobPattern) {
+    public boolean containsAnyOf(String fieldGlobPattern, String... fieldGlobPatterns) {
+        assertNotNull(fieldGlobPattern);
+        assertNotNull(fieldGlobPatterns);
+        for (String globPattern : mkIterable(fieldGlobPattern, fieldGlobPatterns)) {
+            if (contains(globPattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean containsAllOf(String fieldGlobPattern, String... fieldGlobPatterns) {
+        assertNotNull(fieldGlobPattern);
+        assertNotNull(fieldGlobPatterns);
+        for (String globPattern : mkIterable(fieldGlobPattern, fieldGlobPatterns)) {
+            if (!contains(globPattern)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public List<SelectedField> getFields(String fieldGlobPattern, String... fieldGlobPatterns) {
         if (fieldGlobPattern == null || fieldGlobPattern.isEmpty()) {
             return emptyList();
         }
         computeValuesLazily();
 
         List<String> targetNames = new ArrayList<>();
-        PathMatcher globMatcher = globMatcher(fieldGlobPattern);
-        for (String flattenedField : flattenedFields) {
-            Path path = Paths.get(flattenedField);
-            if (globMatcher.matches(path)) {
-                targetNames.add(flattenedField);
+        for (String flattenedField : flattenedFieldsForGlobSearching) {
+            for (String globPattern : mkIterable(fieldGlobPattern, fieldGlobPatterns)) {
+                PathMatcher globMatcher = globMatcher(globPattern);
+                Path path = Paths.get(flattenedField);
+                if (globMatcher.matches(path)) {
+                    targetNames.add(flattenedField);
+                }
             }
         }
-        return targetNames.stream()
-                .map(this::getField)
-                .collect(Collectors.toList());
+
+        return toSetSemanticsList(targetNames.stream()
+                .flatMap(name -> normalisedSelectionSetFields.getOrDefault(name, emptyList()).stream()));
     }
 
     @Override
     public List<SelectedField> getFields() {
         computeValuesLazily();
-
-        return flattenedFields.stream()
-                .map(this::getField)
-                .collect(Collectors.toList());
+        return toSetSemanticsList(normalisedSelectionSetFields.values().stream()
+                .flatMap(Collection::stream));
     }
 
-    private class SelectedFieldImpl implements SelectedField {
-        private final String qualifiedName;
-        private final String name;
-        private final GraphQLFieldDefinition fieldDefinition;
-        private final DataFetchingFieldSelectionSet selectionSet;
-        private final Map<String, Object> arguments;
+    private List<SelectedField> toSetSemanticsList(Stream<SelectedField> stream) {
+        return ImmutableList.copyOf(stream
+                .collect(ImmutableSet.toImmutableSet()));
+    }
 
-        private SelectedFieldImpl(String qualifiedName, MergedField parentFields, GraphQLFieldDefinition fieldDefinition, Map<String, Object> arguments) {
-            this.qualifiedName = qualifiedName;
-            this.name = parentFields.getName();
-            this.fieldDefinition = fieldDefinition;
-            this.arguments = arguments;
-            GraphQLType unwrappedType = GraphQLTypeUtil.unwrapAll(fieldDefinition.getType());
-            if (unwrappedType instanceof GraphQLFieldsContainer) {
-                this.selectionSet = new DataFetchingFieldSelectionSetImpl(parentFields, (GraphQLFieldsContainer) unwrappedType, graphQLSchema, variables, fragmentsByName);
-            } else {
-                this.selectionSet = NOOP;
+    @Override
+    public List<SelectedField> getImmediateFields() {
+        computeValuesLazily();
+        return immediateFields;
+    }
+
+    @Override
+    public Map<String, List<SelectedField>> getFieldsGroupedByResultKey() {
+        return getFields().stream().collect(Collectors.groupingBy(SelectedField::getResultKey));
+    }
+
+    @Override
+    public Map<String, List<SelectedField>> getFieldsGroupedByResultKey(String fieldGlobPattern, String... fieldGlobPatterns) {
+        return getFields(fieldGlobPattern, fieldGlobPatterns).stream().collect(Collectors.groupingBy(SelectedField::getResultKey));
+    }
+
+    private void computeValuesLazily() {
+        if (computedValues) {
+            return;
+        }
+        // this supplier is a once only thread synced call - so do it outside this lock
+        // if only to have only 1 lock in action at a time
+        ExecutableNormalizedField currentNormalisedField = normalizedFieldSupplier.get();
+        synchronized (this) {
+            if (computedValues) {
+                return;
             }
+            flattenedFieldsForGlobSearching = new LinkedHashSet<>();
+            normalisedSelectionSetFields = new LinkedHashMap<>();
+            ImmutableList.Builder<SelectedField> immediateFieldsBuilder = ImmutableList.builder();
+            traverseSubSelectedFields(currentNormalisedField, immediateFieldsBuilder, "", "", true);
+            immediateFields = immediateFieldsBuilder.build();
+            computedValues = true;
+        }
+    }
+
+
+    private void traverseSubSelectedFields(ExecutableNormalizedField currentNormalisedField, ImmutableList.Builder<SelectedField> immediateFieldsBuilder, String qualifiedFieldPrefix, String simpleFieldPrefix, boolean firstLevel) {
+        List<ExecutableNormalizedField> children = currentNormalisedField.getChildren();
+        for (ExecutableNormalizedField normalizedSubSelectedField : children) {
+            String typeQualifiedName = mkTypeQualifiedName(normalizedSubSelectedField);
+            String simpleName = normalizedSubSelectedField.getName();
+
+            String globQualifiedName = mkFieldGlobName(qualifiedFieldPrefix, typeQualifiedName);
+            String globSimpleName = mkFieldGlobName(simpleFieldPrefix, simpleName);
+
+            flattenedFieldsForGlobSearching.add(globQualifiedName);
+            // put in entries for the simple names - eg `Invoice.payments/Payment.amount` becomes `payments/amount`
+            flattenedFieldsForGlobSearching.add(globSimpleName);
+
+            SelectedFieldImpl selectedField = new SelectedFieldImpl(globSimpleName, globQualifiedName, normalizedSubSelectedField, schema);
+            if (firstLevel) {
+                immediateFieldsBuilder.add(selectedField);
+            }
+            normalisedSelectionSetFields.computeIfAbsent(globQualifiedName, newList()).add(selectedField);
+            normalisedSelectionSetFields.computeIfAbsent(globSimpleName, newList()).add(selectedField);
+
+            GraphQLType unwrappedType = GraphQLTypeUtil.unwrapAll(normalizedSubSelectedField.getType(schema));
+            if (!GraphQLTypeUtil.isLeaf(unwrappedType)) {
+                traverseSubSelectedFields(normalizedSubSelectedField, immediateFieldsBuilder, globQualifiedName, globSimpleName, false);
+            }
+        }
+    }
+
+
+    private String removeLeadingSlash(String fieldGlobPattern) {
+        if (fieldGlobPattern.startsWith(SEP)) {
+            fieldGlobPattern = fieldGlobPattern.substring(1);
+        }
+        return fieldGlobPattern;
+    }
+
+    private static String mkTypeQualifiedName(ExecutableNormalizedField executableNormalizedField) {
+        return executableNormalizedField.objectTypeNamesToString() + "." + executableNormalizedField.getName();
+    }
+
+    private static String mkFieldGlobName(String fieldPrefix, String fieldName) {
+        return (!fieldPrefix.isEmpty() ? fieldPrefix + SEP : "") + fieldName;
+    }
+
+    private static PathMatcher globMatcher(String fieldGlobPattern) {
+        return FileSystems.getDefault().getPathMatcher("glob:" + fieldGlobPattern);
+    }
+
+    private List<String> mkIterable(String fieldGlobPattern, String[] fieldGlobPatterns) {
+        List<String> l = new ArrayList<>();
+        l.add(fieldGlobPattern);
+        Collections.addAll(l, fieldGlobPatterns);
+        return l;
+    }
+
+    @Override
+    public String toString() {
+        if (!computedValues) {
+            return "notComputed";
+        }
+        return String.join("\n", flattenedFieldsForGlobSearching);
+    }
+
+    private static class SelectedFieldImpl implements SelectedField {
+
+        private final String qualifiedName;
+        private final String fullyQualifiedName;
+        private final DataFetchingFieldSelectionSet selectionSet;
+        private final ExecutableNormalizedField executableNormalizedField;
+        private final GraphQLSchema schema;
+
+        private SelectedFieldImpl(String simpleQualifiedName, String fullyQualifiedName, ExecutableNormalizedField executableNormalizedField, GraphQLSchema schema) {
+            this.schema = schema;
+            this.qualifiedName = simpleQualifiedName;
+            this.fullyQualifiedName = fullyQualifiedName;
+            this.executableNormalizedField = executableNormalizedField;
+            this.selectionSet = new DataFetchingFieldSelectionSetImpl(() -> executableNormalizedField, schema);
+        }
+
+        private SelectedField mkParent(ExecutableNormalizedField executableNormalizedField) {
+            String parentSimpleQualifiedName = beforeLastSlash(qualifiedName);
+            String parentFullyQualifiedName = beforeLastSlash(fullyQualifiedName);
+            return executableNormalizedField.getParent() == null ? null :
+                    new SelectedFieldImpl(parentSimpleQualifiedName, parentFullyQualifiedName, executableNormalizedField.getParent(), schema);
+        }
+
+        private String beforeLastSlash(String name) {
+            int index = name.lastIndexOf("/");
+            if (index > 0) {
+                return name.substring(0, index);
+            }
+            return "";
         }
 
         @Override
         public String getName() {
-            return name;
+            return executableNormalizedField.getName();
         }
 
         @Override
@@ -215,74 +328,87 @@ public class DataFetchingFieldSelectionSetImpl implements DataFetchingFieldSelec
         }
 
         @Override
-        public GraphQLFieldDefinition getFieldDefinition() {
-            return fieldDefinition;
+        public String getFullyQualifiedName() {
+            return fullyQualifiedName;
+        }
+
+        @Override
+        public List<GraphQLFieldDefinition> getFieldDefinitions() {
+            return executableNormalizedField.getFieldDefinitions(schema);
+        }
+
+        @Override
+        public GraphQLOutputType getType() {
+            return executableNormalizedField.getType(schema);
+        }
+
+        @Override
+        public List<GraphQLObjectType> getObjectTypes() {
+            return this.schema.getTypes(executableNormalizedField.getObjectTypeNames());
+        }
+
+        @Override
+        public List<String> getObjectTypeNames() {
+            return ImmutableList.copyOf(executableNormalizedField.getObjectTypeNames());
         }
 
         @Override
         public Map<String, Object> getArguments() {
-            return arguments;
+            return executableNormalizedField.getResolvedArguments();
+        }
+
+        @Override
+        public int getLevel() {
+            return executableNormalizedField.getLevel();
+        }
+
+        @Override
+        public boolean isConditional() {
+            return executableNormalizedField.isConditional(this.schema);
+        }
+
+        @Override
+        public String getAlias() {
+            return executableNormalizedField.getAlias();
+        }
+
+        @Override
+        public String getResultKey() {
+            return executableNormalizedField.getResultKey();
+        }
+
+        @Override
+        public SelectedField getParentField() {
+            // lazy
+            return mkParent(executableNormalizedField);
         }
 
         @Override
         public DataFetchingFieldSelectionSet getSelectionSet() {
             return selectionSet;
         }
-    }
 
-    private PathMatcher globMatcher(String fieldGlobPattern) {
-        return FileSystems.getDefault().getPathMatcher("glob:" + fieldGlobPattern);
-    }
-
-    private void computeValuesLazily() {
-        synchronized (this) {
-            if (selectionSetFields != null) {
-                return;
+        // a selected field is the same as another selected field if its the same ExecutableNF
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
             }
-
-            selectionSetFields = new LinkedHashMap<>();
-            selectionSetFieldDefinitions = new LinkedHashMap<>();
-            selectionSetFieldArgs = new LinkedHashMap<>();
-            flattenedFields = new LinkedHashSet<>();
-
-            traverseFields(parentFields, parentFieldType, "");
-        }
-    }
-
-    private final static String SEP = "/";
-
-
-    private void traverseFields(MergedField fieldList, GraphQLFieldsContainer parentFieldType, String fieldPrefix) {
-
-        FieldCollectorParameters parameters = FieldCollectorParameters.newParameters()
-                .schema(graphQLSchema)
-                .objectType(asObjectTypeOrNull(parentFieldType))
-                .fragments(fragmentsByName)
-                .variables(variables)
-                .build();
-
-        MergedSelectionSet collectedFields = fieldCollector.collectFields(parameters, fieldList);
-        for (Map.Entry<String, MergedField> entry : collectedFields.getSubFields().entrySet()) {
-            String fieldName = mkFieldName(fieldPrefix, entry.getKey());
-            MergedField collectedFieldList = entry.getValue();
-            selectionSetFields.put(fieldName, collectedFieldList);
-
-            Field field = collectedFieldList.getSingleField();
-            GraphQLFieldDefinition fieldDef = Introspection.getFieldDef(graphQLSchema, parentFieldType, field.getName());
-            GraphQLType unwrappedType = GraphQLTypeUtil.unwrapAll(fieldDef.getType());
-            Map<String, Object> argumentValues = valuesResolver.getArgumentValues(fieldDef.getArguments(), field.getArguments(), variables);
-
-            selectionSetFieldArgs.put(fieldName, argumentValues);
-            selectionSetFieldDefinitions.put(fieldName, fieldDef);
-            flattenedFields.add(fieldName);
-
-            if (unwrappedType instanceof GraphQLFieldsContainer) {
-                traverseFields(collectedFieldList, (GraphQLFieldsContainer) unwrappedType, fieldName);
+            if (o == null || getClass() != o.getClass()) {
+                return false;
             }
+            SelectedFieldImpl that = (SelectedFieldImpl) o;
+            return executableNormalizedField.equals(that.executableNormalizedField);
         }
-    }
 
-    private String mkFieldName(String fieldPrefix, String fieldName) {
-        return (!fieldPrefix.isEmpty() ? fieldPrefix + SEP : "") + fieldName;
+        @Override
+        public int hashCode() {
+            return Objects.hash(executableNormalizedField);
+        }
+
+        @Override
+        public String toString() {
+            return getFullyQualifiedName();
+        }
     }
 }

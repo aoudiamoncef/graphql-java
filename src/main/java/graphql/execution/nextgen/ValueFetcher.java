@@ -1,22 +1,26 @@
 package graphql.execution.nextgen;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Assert;
 import graphql.ExceptionWhileDataFetching;
 import graphql.GraphQLError;
 import graphql.Internal;
-import graphql.execution.AbsoluteGraphQLError;
+import graphql.collect.ImmutableKit;
 import graphql.execution.Async;
 import graphql.execution.DataFetcherResult;
+import graphql.execution.DefaultValueUnboxer;
 import graphql.execution.ExecutionContext;
 import graphql.execution.ExecutionId;
-import graphql.execution.ExecutionPath;
 import graphql.execution.ExecutionStepInfo;
 import graphql.execution.FetchedValue;
 import graphql.execution.MergedField;
-import graphql.execution.UnboxPossibleOptional;
+import graphql.execution.ResultPath;
 import graphql.execution.ValuesResolver;
+import graphql.execution.directives.QueryDirectivesImpl;
 import graphql.language.Field;
+import graphql.normalized.ExecutableNormalizedField;
+import graphql.normalized.ExecutableNormalizedOperation;
 import graphql.schema.DataFetcher;
 import graphql.schema.DataFetchingEnvironment;
 import graphql.schema.DataFetchingFieldSelectionSet;
@@ -26,6 +30,8 @@ import graphql.schema.GraphQLFieldDefinition;
 import graphql.schema.GraphQLFieldsContainer;
 import graphql.schema.GraphQLOutputType;
 import graphql.schema.GraphQLTypeUtil;
+import graphql.util.FpKit;
+import graphql.util.LogKit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.stream.Collectors;
+import java.util.function.Supplier;
 
 import static graphql.schema.DataFetchingEnvironmentImpl.newDataFetchingEnvironment;
 import static java.util.Collections.singletonList;
@@ -47,6 +53,7 @@ public class ValueFetcher {
     ValuesResolver valuesResolver = new ValuesResolver();
 
     private static final Logger log = LoggerFactory.getLogger(ValueFetcher.class);
+    private static final Logger logNotSafe = LogKit.getNotPrivacySafeLogger(ExecutionStrategy.class);
 
     public static final Object NULL_VALUE = new Object();
 
@@ -73,7 +80,7 @@ public class ValueFetcher {
     @SuppressWarnings("unchecked")
     private List<FetchedValue> extractBatchedValues(FetchedValue fetchedValueContainingList, int expectedSize) {
         List<Object> list = (List<Object>) fetchedValueContainingList.getFetchedValue();
-        Assert.assertTrue(list.size() == expectedSize, "Unexpected result size");
+        Assert.assertTrue(list.size() == expectedSize, () -> "Unexpected result size");
         List<FetchedValue> result = new ArrayList<>();
         for (int i = 0; i < list.size(); i++) {
             List<GraphQLError> errors;
@@ -112,10 +119,15 @@ public class ValueFetcher {
         GraphQLCodeRegistry codeRegistry = executionContext.getGraphQLSchema().getCodeRegistry();
         GraphQLFieldsContainer parentType = getFieldsContainer(executionInfo);
 
-        Map<String, Object> argumentValues = valuesResolver.getArgumentValues(codeRegistry, fieldDef.getArguments(), field.getArguments(), executionContext.getVariables());
+        Supplier<Map<String, Object>> argumentValues = FpKit.intraThreadMemoize(() -> valuesResolver.getArgumentValues(codeRegistry, fieldDef.getArguments(), field.getArguments(), executionContext.getVariables()));
+
+        QueryDirectivesImpl queryDirectives = new QueryDirectivesImpl(sameFields, executionContext.getGraphQLSchema(), executionContext.getVariables());
 
         GraphQLOutputType fieldType = fieldDef.getType();
-        DataFetchingFieldSelectionSet fieldCollector = DataFetchingFieldSelectionSetImpl.newCollector(executionContext, fieldType, sameFields);
+
+        Supplier<ExecutableNormalizedOperation> normalizedQuery = executionContext.getNormalizedQueryTree();
+        Supplier<ExecutableNormalizedField> normalisedField = () -> normalizedQuery.get().getNormalizedField(sameFields, executionInfo.getObjectType(), executionInfo.getPath());
+        DataFetchingFieldSelectionSet selectionSet = DataFetchingFieldSelectionSetImpl.newCollector(executionContext.getGraphQLSchema(), fieldType, normalisedField);
 
         DataFetchingEnvironment environment = newDataFetchingEnvironment(executionContext)
                 .source(source)
@@ -126,11 +138,12 @@ public class ValueFetcher {
                 .fieldType(fieldType)
                 .executionStepInfo(executionInfo)
                 .parentType(parentType)
-                .selectionSet(fieldCollector)
+                .selectionSet(selectionSet)
+                .queryDirectives(queryDirectives)
                 .build();
 
         ExecutionId executionId = executionContext.getExecutionId();
-        ExecutionPath path = executionInfo.getPath();
+        ResultPath path = executionInfo.getPath();
         return callDataFetcher(codeRegistry, parentType, fieldDef, environment, executionId, path)
                 .thenApply(rawFetchedValue -> FetchedValue.newFetchedValue()
                         .fetchedValue(rawFetchedValue)
@@ -141,27 +154,33 @@ public class ValueFetcher {
                 .thenApply(this::unboxPossibleOptional);
     }
 
-    private FetchedValue handleExceptionWhileFetching(Field field, ExecutionPath path, Throwable exception) {
+    private FetchedValue handleExceptionWhileFetching(Field field, ResultPath path, Throwable exception) {
         ExceptionWhileDataFetching exceptionWhileDataFetching = new ExceptionWhileDataFetching(path, exception, field.getSourceLocation());
         return FetchedValue.newFetchedValue().errors(singletonList(exceptionWhileDataFetching)).build();
     }
 
     private FetchedValue unboxPossibleOptional(FetchedValue result) {
         return result.transform(
-                builder -> builder.fetchedValue(UnboxPossibleOptional.unboxPossibleOptional(result.getFetchedValue()))
+                builder -> builder.fetchedValue(DefaultValueUnboxer.unboxValue(result.getFetchedValue()))
         );
     }
 
-    private CompletableFuture<Object> callDataFetcher(GraphQLCodeRegistry codeRegistry, GraphQLFieldsContainer parentType, GraphQLFieldDefinition fieldDef, DataFetchingEnvironment environment, ExecutionId executionId, ExecutionPath path) {
+    private CompletableFuture<Object> callDataFetcher(GraphQLCodeRegistry codeRegistry, GraphQLFieldsContainer parentType, GraphQLFieldDefinition fieldDef, DataFetchingEnvironment environment, ExecutionId executionId, ResultPath path) {
         CompletableFuture<Object> result = new CompletableFuture<>();
         try {
             DataFetcher dataFetcher = codeRegistry.getDataFetcher(parentType, fieldDef);
-            log.debug("'{}' fetching field '{}' using data fetcher '{}'...", executionId, path, dataFetcher.getClass().getName());
+            if (log.isDebugEnabled()) {
+                log.debug("'{}' fetching field '{}' using data fetcher '{}'...", executionId, path, dataFetcher.getClass().getName());
+            }
             Object fetchedValueRaw = dataFetcher.get(environment);
-            log.debug("'{}' field '{}' fetch returned '{}'", executionId, path, fetchedValueRaw == null ? "null" : fetchedValueRaw.getClass().getName());
+            if (logNotSafe.isDebugEnabled()) {
+                logNotSafe.debug("'{}' field '{}' fetch returned '{}'", executionId, path, fetchedValueRaw == null ? "null" : fetchedValueRaw.getClass().getName());
+            }
             handleFetchedValue(fetchedValueRaw, result);
         } catch (Exception e) {
-            log.debug(String.format("'%s', field '%s' fetch threw exception", executionId, path), e);
+            if (logNotSafe.isDebugEnabled()) {
+                logNotSafe.debug("'{}', field '{}' fetch threw exception", executionId, path, e);
+            }
             result.completeExceptionally(e);
         }
         return result;
@@ -187,21 +206,12 @@ public class ValueFetcher {
         cf.complete(fetchedValue);
     }
 
-    private FetchedValue unboxPossibleDataFetcherResult(MergedField sameField, ExecutionPath executionPath, FetchedValue result, Object localContext) {
+    private FetchedValue unboxPossibleDataFetcherResult(MergedField sameField, ResultPath resultPath, FetchedValue result, Object localContext) {
         if (result.getFetchedValue() instanceof DataFetcherResult) {
 
-            List<GraphQLError> addErrors;
             DataFetcherResult<?> dataFetcherResult = (DataFetcherResult) result.getFetchedValue();
-            if (dataFetcherResult.isMapRelativeErrors()) {
-                addErrors = dataFetcherResult.getErrors().stream()
-                        .map(relError -> new AbsoluteGraphQLError(sameField, executionPath, relError))
-                        .collect(Collectors.toList());
-            } else {
-                addErrors = new ArrayList<>(dataFetcherResult.getErrors());
-            }
-            List<GraphQLError> newErrors;
-            newErrors = new ArrayList<>(result.getErrors());
-            newErrors.addAll(addErrors);
+            List<GraphQLError> addErrors = ImmutableList.copyOf(dataFetcherResult.getErrors());
+            List<GraphQLError> newErrors = ImmutableKit.concatLists(result.getErrors(), addErrors);
 
             Object newLocalContext = dataFetcherResult.getLocalContext();
             if (newLocalContext == null) {

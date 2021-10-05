@@ -8,13 +8,16 @@ import graphql.language.Document;
 import graphql.language.SDLDefinition;
 import graphql.parser.InvalidSyntaxException;
 import graphql.parser.Parser;
+import graphql.parser.ParserOptions;
+import graphql.schema.idl.errors.NonSDLDefinitionError;
 import graphql.schema.idl.errors.SchemaProblem;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.Reader;
 import java.io.StringReader;
-import java.io.StringWriter;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,6 +50,19 @@ public class SchemaParser {
     }
 
     /**
+     * Parse a inputStream of schema definitions and create a {@link TypeDefinitionRegistry}
+     *
+     * @param inputStream the inputStream to parse
+     *
+     * @return registry of type definitions
+     *
+     * @throws SchemaProblem if there are problems compiling the schema definitions
+     */
+    public TypeDefinitionRegistry parse(InputStream inputStream) throws SchemaProblem {
+        return parse(new InputStreamReader(inputStream));
+    }
+
+    /**
      * Parse a reader of schema definitions and create a {@link TypeDefinitionRegistry}
      *
      * @param reader the reader to parse
@@ -56,8 +72,22 @@ public class SchemaParser {
      * @throws SchemaProblem if there are problems compiling the schema definitions
      */
     public TypeDefinitionRegistry parse(Reader reader) throws SchemaProblem {
+        return parse(reader, null);
+    }
+
+    /**
+     * Parse a reader of schema definitions and create a {@link TypeDefinitionRegistry}
+     *
+     * @param reader        the reader to parse
+     * @param parserOptions the parse options to use while parsing
+     *
+     * @return registry of type definitions
+     *
+     * @throws SchemaProblem if there are problems compiling the schema definitions
+     */
+    public TypeDefinitionRegistry parse(Reader reader, ParserOptions parserOptions) throws SchemaProblem {
         try (Reader input = reader) {
-            return parseImpl(input);
+            return parseImpl(input, parserOptions);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -77,9 +107,19 @@ public class SchemaParser {
     }
 
     public TypeDefinitionRegistry parseImpl(Reader schemaInput) {
+        // why it this public - (head shake)
+        return parseImpl(schemaInput, null);
+    }
+
+    private TypeDefinitionRegistry parseImpl(Reader schemaInput, ParserOptions parseOptions) {
         try {
+            if (parseOptions == null) {
+                // for SDL we dont stop how many parser tokens there are - its not the attack vector
+                // to be prevented compared to queries
+                parseOptions = ParserOptions.getDefaultParserOptions().transform(opts -> opts.maxTokens(Integer.MAX_VALUE));
+            }
             Parser parser = new Parser();
-            Document document = parser.parseDocument(schemaInput);
+            Document document = parser.parseDocument(schemaInput, parseOptions);
 
             return buildRegistry(document);
         } catch (InvalidSyntaxException e) {
@@ -108,6 +148,8 @@ public class SchemaParser {
         for (Definition definition : definitions) {
             if (definition instanceof SDLDefinition) {
                 typeRegistry.add((SDLDefinition) definition).ifPresent(errors::add);
+            } else {
+                errors.add(new NonSDLDefinitionError(definition));
             }
         }
         if (errors.size() > 0) {
@@ -115,15 +157,5 @@ public class SchemaParser {
         } else {
             return typeRegistry;
         }
-    }
-
-    private String read(Reader reader) throws IOException {
-        char[] buffer = new char[1024 * 4];
-        StringWriter sw = new StringWriter();
-        int n;
-        while (-1 != (n = reader.read(buffer))) {
-            sw.write(buffer, 0, n);
-        }
-        return sw.toString();
     }
 }

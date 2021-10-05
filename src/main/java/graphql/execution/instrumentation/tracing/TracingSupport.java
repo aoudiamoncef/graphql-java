@@ -1,5 +1,6 @@
 package graphql.execution.instrumentation.tracing;
 
+import com.google.common.collect.ImmutableList;
 import graphql.PublicApi;
 import graphql.execution.ExecutionStepInfo;
 import graphql.execution.instrumentation.InstrumentationState;
@@ -7,11 +8,12 @@ import graphql.schema.DataFetchingEnvironment;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+
+import static graphql.schema.GraphQLTypeUtil.simplePrint;
 
 /**
  * This creates a map of tracing information as outlined in https://github.com/apollographql/apollo-tracing
@@ -76,7 +78,7 @@ public class TracingSupport implements InstrumentationState {
 
             Map<String, Object> fetchMap = new LinkedHashMap<>();
             fetchMap.put("path", executionStepInfo.getPath().toList());
-            fetchMap.put("parentType", executionStepInfo.getParent().getUnwrappedNonNullType().getName());
+            fetchMap.put("parentType", simplePrint(executionStepInfo.getParent().getUnwrappedNonNullType()));
             fetchMap.put("returnType", executionStepInfo.simplePrint());
             fetchMap.put("fieldName", executionStepInfo.getFieldDefinition().getName());
             fetchMap.put("startOffset", startOffset);
@@ -138,15 +140,12 @@ public class TracingSupport implements InstrumentationState {
     }
 
     private Object copyMap(Map<String, Object> map) {
-        Map<String, Object> mapCopy = new LinkedHashMap<>();
-        mapCopy.putAll(map);
-        return mapCopy;
-
+        return new LinkedHashMap<>(map);
     }
 
     private Map<String, Object> executionData() {
         Map<String, Object> map = new LinkedHashMap<>();
-        List<Map<String, Object>> list = new ArrayList<>(fieldData);
+        List<Map<String, Object>> list = ImmutableList.copyOf(fieldData);
         map.put("resolvers", list);
         return map;
     }

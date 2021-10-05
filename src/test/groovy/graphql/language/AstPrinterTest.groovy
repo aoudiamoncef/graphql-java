@@ -95,15 +95,12 @@ scalar DateTime
         //
         // notice how it tightens everything up
         //
-        output == """# objects can have comments
-# over a number of lines
-schema {
+        output == """schema {
   query: QueryType
   mutation: Mutation
 }
 
 type QueryType {
-  # the hero of the film
   hero(episode: Episode): Character
   human(id: String): Human
   droid(id: ID!): Droid
@@ -169,9 +166,7 @@ scalar DateTime
         String output = printAst(document.getDefinitions().get(0))
 
         expect:
-        output == """# objects can have comments
-# over a number of lines
-schema {
+        output == """schema {
   query: QueryType
   mutation: Mutation
 }"""
@@ -183,7 +178,6 @@ schema {
 
         expect:
         output == """type QueryType {
-  # the hero of the film
   hero(episode: Episode): Character
   human(id: String): Human
   droid(id: ID!): Droid
@@ -286,7 +280,7 @@ query HeroNameAndFriends($episode: Episode) {
         def query = '''
 query Hero($episode: Episode, $withFriends: Boolean!) {
   hero ( episode: $episode) {
-    name
+    name @repeatable @repeatable
     friends @include (if : $withFriends) {
       name
     }
@@ -299,7 +293,7 @@ query Hero($episode: Episode, $withFriends: Boolean!) {
         expect:
         output == '''query Hero($episode: Episode, $withFriends: Boolean!) {
   hero(episode: $episode) {
-    name
+    name @repeatable @repeatable
     friends @include(if: $withFriends) {
       name
     }
@@ -452,20 +446,32 @@ type Query {
 
         expect:
         output == '''type Query {
-  field(
-  #description1
-  arg1: String
-  arg2: String
-  #description3
-  arg3: String
-  ): String
+  field(arg1: String, arg2: String, arg3: String): String
 }
 '''
 
     }
 
+    def "print empty description"() {
+        def query = '''
+""
+scalar Demo
+'''
+        def document = parse(query)
+        String output = printAst(document)
+
+        expect:
+        output == '''""
+scalar Demo
+'''
+    }
+
     def "print type extensions"() {
         def query = '''
+    extend schema {
+        query: Query
+    }
+    
     extend type Object @directive {
         objectField : String
     }    
@@ -491,7 +497,11 @@ type Query {
         String output = printAst(document)
 
         expect:
-        output == '''extend type Object @directive {
+        output == '''extend schema {
+  query: Query
+}
+
+extend type Object @directive {
   objectField: String
 }
 
@@ -562,4 +572,84 @@ extend input Input @directive {
 '''
     }
 
+    def 'StringValue is converted to valid Strings'() {
+
+        when:
+        def result = AstPrinter.printAstCompact(new StringValue(strValue))
+
+        then:
+        result == expected
+
+        where:
+        strValue            | expected
+        'VALUE'             | '"VALUE"'
+        'VA\n\t\f\n\b\\LUE' | '"VA\\n\\t\\f\\n\\b\\\\LUE"'
+        'VA\\L"UE'          | '"VA\\\\L\\"UE"'
+    }
+
+    def 'Interfaces implementing interfaces'() {
+        given:
+        def interfaceType = InterfaceTypeDefinition
+                .newInterfaceTypeDefinition()
+                .name("Resource")
+                .implementz(new TypeName("Node"))
+                .implementz(new TypeName("Extra"))
+                .build()
+
+
+        when:
+        def result = AstPrinter.printAstCompact(interfaceType)
+
+        then:
+        result == "interface Resource implements Node & Extra {}"
+
+    }
+
+    def 'Interfaces implementing interfaces in extension'() {
+        given:
+        def interfaceType = InterfaceTypeExtensionDefinition
+                .newInterfaceTypeExtensionDefinition()
+                .name("Resource")
+                .implementz(new TypeName("Node"))
+                .implementz(new TypeName("Extra"))
+                .build()
+
+        when:
+        def result = AstPrinter.printAstCompact(interfaceType)
+
+        then:
+        result == "extend interface Resource implements Node & Extra {}"
+
+    }
+
+    def "directive definitions can be printed"() {
+
+        given:
+        def directiveDef1 = DirectiveDefinition.newDirectiveDefinition()
+                .name("d1")
+                .repeatable(true)
+                .directiveLocation(DirectiveLocation.newDirectiveLocation().name("FIELD").build())
+                .directiveLocation(DirectiveLocation.newDirectiveLocation().name("OBJECT").build())
+                .build()
+
+        def directiveDef2 = DirectiveDefinition.newDirectiveDefinition()
+                .name("d2")
+                .repeatable(false)
+                .directiveLocation(DirectiveLocation.newDirectiveLocation().name("FIELD").build())
+                .directiveLocation(DirectiveLocation.newDirectiveLocation().name("ENUM").build())
+                .build()
+
+        when:
+        def result = AstPrinter.printAstCompact(directiveDef1)
+
+        then:
+        result == "directive @d1 repeatable on FIELD | OBJECT"
+
+        when:
+        result = AstPrinter.printAstCompact(directiveDef2)
+
+        then:
+        result == "directive @d2 on FIELD | ENUM"
+
+    }
 }

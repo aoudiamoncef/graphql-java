@@ -1,29 +1,29 @@
 package graphql.schema.idl
 
 import graphql.GraphQLError
+import graphql.TestUtil
 import graphql.TypeResolutionEnvironment
 import graphql.language.StringValue
 import graphql.schema.Coercing
 import graphql.schema.CoercingParseLiteralException
 import graphql.schema.DataFetcher
 import graphql.schema.GraphQLObjectType
-import graphql.schema.GraphQLScalarType
 import graphql.schema.TypeResolver
 import graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError
 import graphql.schema.idl.errors.DirectiveIllegalLocationError
 import graphql.schema.idl.errors.DirectiveUndeclaredError
 import graphql.schema.idl.errors.MissingTypeError
 import graphql.schema.idl.errors.NonUniqueNameError
-import graphql.schema.idl.errors.SchemaMissingError
+import graphql.schema.idl.errors.QueryOperationMissingError
 import spock.lang.Specification
 import spock.lang.Unroll
 
+import static graphql.schema.GraphQLScalarType.newScalar
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.DUPLICATED_KEYS_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.EXPECTED_ENUM_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.EXPECTED_LIST_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.EXPECTED_NON_NULL_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.EXPECTED_OBJECT_MESSAGE
-import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.EXPECTED_SCALAR_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.MISSING_REQUIRED_FIELD_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.MUST_BE_VALID_ENUM_VALUE_MESSAGE
 import static graphql.schema.idl.errors.DirectiveIllegalArgumentTypeError.NOT_A_VALID_SCALAR_LITERAL_MESSAGE
@@ -32,10 +32,7 @@ import static java.lang.String.format
 
 class SchemaTypeCheckerTest extends Specification {
 
-    def enforceSchemaDirectives = false
-
-
-    TypeDefinitionRegistry parse(String spec) {
+    static TypeDefinitionRegistry parseSDL(String spec) {
         new SchemaParser().parse(spec)
     }
 
@@ -89,12 +86,12 @@ class SchemaTypeCheckerTest extends Specification {
     }
 
     List<GraphQLError> check(String spec, List<String> resolvingNames) {
-        def types = parse(spec)
+        def types = parseSDL(spec)
 
 
         NamedWiringFactory wiringFactory = new NamedWiringFactory("InterfaceType")
 
-        def scalesScalar = new GraphQLScalarType("Scales", "", new Coercing() {
+        def scalesScalar = newScalar().name("Scales").coercing(new Coercing() {
             @Override
             Object serialize(Object dataFetcherResult) {
                 return null
@@ -110,7 +107,9 @@ class SchemaTypeCheckerTest extends Specification {
                 return null
             }
         })
-        def aCustomDateScalar = new GraphQLScalarType("ACustomDate", "", new Coercing() {
+        .build()
+
+        def aCustomDateScalar = newScalar().name("ACustomDate").coercing(new Coercing() {
             @Override
             Object serialize(Object dataFetcherResult) {
                 return null
@@ -128,7 +127,8 @@ class SchemaTypeCheckerTest extends Specification {
                 }
                 return null
             }
-        })
+        }).build()
+
         def runtimeBuilder = RuntimeWiring.newRuntimeWiring()
                 .wiringFactory(wiringFactory)
                 .scalar(scalesScalar)
@@ -140,7 +140,7 @@ class SchemaTypeCheckerTest extends Specification {
         for (String name : resolvingNames) {
             runtimeBuilder.type(TypeRuntimeWiring.newTypeWiring(name).typeResolver(resolver))
         }
-        return new SchemaTypeChecker().checkTypeRegistry(types, runtimeBuilder.build(), enforceSchemaDirectives)
+        return new SchemaTypeChecker().checkTypeRegistry(types, runtimeBuilder.build())
     }
 
     def "test missing type in object"() {
@@ -254,7 +254,7 @@ class SchemaTypeCheckerTest extends Specification {
 
         expect:
 
-        result.get(0) instanceof SchemaMissingError
+        result.get(0) instanceof QueryOperationMissingError
     }
 
     def "test missing schema operation types"() {
@@ -306,7 +306,7 @@ class SchemaTypeCheckerTest extends Specification {
 
         expect:
 
-        result.get(0) instanceof SchemaMissingError
+        result.get(0) instanceof QueryOperationMissingError
     }
 
     def "test operation type is not an object"() {
@@ -400,8 +400,8 @@ class SchemaTypeCheckerTest extends Specification {
         result.get(0).getMessage().contains("tried to redefine field 'fieldA'")
     }
 
-    def "test ext type can redefine fields in their base type of the same type"() {
-
+    def "test ext type cannot redefine fields in their base type of the same type"() {
+        given:
         def spec = """                       
 
             type BaseType {
@@ -418,11 +418,12 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
+        when:
         def result = check(spec)
 
-        expect:
+        then:
 
-        result.isEmpty()
+        errorContaining(result, "BaseType' extension type [@n:n] tried to redefine field 'fieldA' [@n:n]")
     }
 
     def "test ext type redefines fields in their peer types"() {
@@ -454,7 +455,7 @@ class SchemaTypeCheckerTest extends Specification {
     }
 
     def "test ext type redefines fields in their peer types of the same type is ok"() {
-
+        given:
         def spec = """                       
 
             type BaseType {
@@ -474,11 +475,11 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
+        when:
         def result = check(spec)
 
-        expect:
-
-        result.isEmpty()
+        then:
+        errorContaining(result, "BaseType' extension type [@n:n] tried to redefine field 'fieldB' [@n:n]")
     }
 
     def "test ext type is missing the base type"() {
@@ -707,6 +708,90 @@ class SchemaTypeCheckerTest extends Specification {
 
     }
 
+    def "test field arguments on object can contain additional optional arguments"() {
+        def spec = """
+            interface InterfaceType {
+                fieldA : Int
+                fieldB(arg1 : String = "defaultVal") : String
+            }
+
+            type BaseType {
+                fieldX : Int
+            }
+
+            extend type BaseType implements InterfaceType {
+                fieldA(arg1 : String) : Int
+                fieldB(arg1 : String = "defaultVal", arg2 : String) : String
+            }
+
+            schema {
+              query : BaseType
+            }
+        """
+
+        def result = check(spec)
+
+        expect:
+
+        result.isEmpty()
+    }
+
+    def "order of interface args does not matter"() {
+        def spec = """
+            interface InterfaceType {
+                fieldA(arg1 : String, arg2 : Int) : String
+            }
+
+            type BaseType {
+                fieldX : Int
+            }
+
+            extend type BaseType implements InterfaceType {
+                fieldA(arg2 : Int, arg1 : String) : String
+            }
+
+            schema {
+              query : BaseType
+            }
+        """
+
+        def result = check(spec)
+
+        expect:
+
+        result.isEmpty()
+    }
+
+
+    def "test field arguments on object cannot contain additional required arguments"() {
+        def spec = """
+            interface InterfaceType {
+                fieldA : Int
+                fieldB(arg1 : String = "defaultVal") : String
+            }
+
+            type BaseType {
+                fieldX : Int
+            }
+
+            extend type BaseType implements InterfaceType {
+                fieldA(arg1 : String!) : Int
+                fieldB(arg1 : String = "defaultVal", arg2 : String!) : String
+            }
+
+            schema {
+              query : BaseType
+            }
+        """
+
+        def result = check(spec)
+
+        expect:
+
+        result.get(0).getMessage().contains("field 'fieldA' defines an additional non-optional argument 'arg1: String!' which is not allowed because field is also defined in interface 'InterfaceType'")
+        result.get(1).getMessage().contains("field 'fieldB' defines an additional non-optional argument 'arg2: String!' which is not allowed because field is also defined in interface 'InterfaceType'")
+    }
+
     def "test field arguments on objects must match the interface"() {
         def spec = """    
             interface InterfaceType {
@@ -887,14 +972,13 @@ class SchemaTypeCheckerTest extends Specification {
             }
             
             enum EnumType {
-                
                 enumA @deprecated(badName : "must be called reason"),
                 enumB @deprecated(reason : "it must have", one : "argument value")
             }
-
+            
+            # deprecation is no allowed on input field definitions and args atm, see: https://github.com/graphql-java/graphql-java/issues/1770
             input InputType {
-                inputFieldA : String @deprecated(badName : "must be called reason")
-                inputFieldB : String @deprecated(reason : "it must have", one : "argument value")
+                inputField : String @deprecated
             }
         """
 
@@ -903,13 +987,14 @@ class SchemaTypeCheckerTest extends Specification {
         expect:
 
         !result.isEmpty()
-        result.size() == 8
+        result.size() == 7
     }
 
-    def "test that directives are valid"() {
+    def "test that non repeatable directives are validated"() {
 
         def spec = """                        
-            
+            directive @directiveA on FIELD_DEFINITION | ENUM_VALUE | INPUT_FIELD_DEFINITION
+            directive @directiveOK on FIELD_DEFINITION | ENUM_VALUE | INPUT_FIELD_DEFINITION
             interface InterfaceType1 {
                 fieldA : String @directiveA @directiveA 
             }
@@ -948,7 +1033,7 @@ class SchemaTypeCheckerTest extends Specification {
     def "test that directives args are valid"() {
 
         def spec = """                        
-            
+            directive @directive(arg1: Int,argOK: Int) on FIELD_DEFINITION | ENUM_VALUE | INPUT_FIELD_DEFINITION 
             interface InterfaceType1 {
                 fieldA : String @directive(arg1 : 1, arg1 : 2) 
             }
@@ -1040,7 +1125,7 @@ class SchemaTypeCheckerTest extends Specification {
     def "interface type extensions invariants are enforced"() {
 
         def spec = """                        
-
+            directive @directive on INTERFACE
             type Query implements InterfaceType1 {
                 fieldA : String
                 fieldC : String
@@ -1088,7 +1173,7 @@ class SchemaTypeCheckerTest extends Specification {
             type Baz {
                 baz : String
             }
-
+            directive @directive on UNION
             union FooBar @directive = Foo | Bar
 
             extend union FooBar @directive
@@ -1319,7 +1404,6 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1336,7 +1420,6 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1353,7 +1436,6 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1374,7 +1456,6 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1395,7 +1476,6 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1436,7 +1516,6 @@ class SchemaTypeCheckerTest extends Specification {
 
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1448,22 +1527,15 @@ class SchemaTypeCheckerTest extends Specification {
         where:
 
         allowedArgType | argValue                                                                               | detailedMessage
-        "String"       | 'MONDAY'                                                                               | format(EXPECTED_SCALAR_MESSAGE, "EnumValue")
-        "String"       | '{ an: "object" }'                                                                     | format(EXPECTED_SCALAR_MESSAGE, "ObjectValue")
-        "String"       | '["str", "str2"]'                                                                      | format(EXPECTED_SCALAR_MESSAGE, "ArrayValue")
         "ACustomDate"  | '"AFailingDate"'                                                                       | format(NOT_A_VALID_SCALAR_LITERAL_MESSAGE, "ACustomDate")
-        "[String]"     | '"str"'                                                                                | format(EXPECTED_LIST_MESSAGE, "StringValue")
-        "[String]!"    | '"str"'                                                                                | format(EXPECTED_LIST_MESSAGE, "StringValue")
         "[String!]"    | '["str", null]'                                                                        | format(EXPECTED_NON_NULL_MESSAGE)
         "[[String!]!]" | '[["str"], ["str2", null]]'                                                            | format(EXPECTED_NON_NULL_MESSAGE)
         "WEEKDAY"      | '"somestr"'                                                                            | format(EXPECTED_ENUM_MESSAGE, "StringValue")
         "WEEKDAY"      | 'SATURDAY'                                                                             | format(MUST_BE_VALID_ENUM_VALUE_MESSAGE, "SATURDAY", "MONDAY,TUESDAY")
         "UserInput"    | '{ fieldNonNull: "str", fieldNonNull: "dupeKey" }'                                     | format(DUPLICATED_KEYS_MESSAGE, "fieldNonNull")
         "UserInput"    | '{ fieldNonNull: "str", unknown: "field" }'                                            | format(UNKNOWN_FIELDS_MESSAGE, "unknown", "UserInput")
-        "UserInput"    | '{ fieldNonNull: "str", fieldArray: "strInsteadOfArray" }'                             | format(EXPECTED_LIST_MESSAGE, "StringValue")
         "UserInput"    | '{ fieldNonNull: "str", fieldArrayOfArray: ["ArrayInsteadOfArrayOfArray"] }'           | format(EXPECTED_LIST_MESSAGE, "StringValue")
         "UserInput"    | '{ fieldNonNull: "str", fieldNestedInput: "strInsteadOfObject" }'                      | format(EXPECTED_OBJECT_MESSAGE, "StringValue")
-        "UserInput"    | '{ fieldNonNull: "str", fieldNestedInput: { street: { s: "objectInsteadOfString" }} }' | format(EXPECTED_SCALAR_MESSAGE, "ObjectValue")
         "UserInput"    | '{ field: "missing the `fieldNonNull` entry"}'                                         | format(MISSING_REQUIRED_FIELD_MESSAGE, "fieldNonNull")
     }
 
@@ -1496,7 +1568,6 @@ class SchemaTypeCheckerTest extends Specification {
             }
         """
 
-        enforceSchemaDirectives = true
         def result = check(spec)
 
         expect:
@@ -1524,4 +1595,246 @@ class SchemaTypeCheckerTest extends Specification {
         "UserInput"    | '{ fieldNonNull: "str", fieldNestedInput: { street: "nestedStr"} }'
     }
 
+
+    def "different field descriptions on interface vs implementation should not cause an error "() {
+        given:
+        def sdl = """
+        type Query { hello: String }
+        interface Customer {
+            "The display name of the customer"
+            displayName: String!
+        }
+
+        type PersonCustomer implements Customer {
+            "The display name of the customer. For persons, this is the first and last name."
+            displayName: String!
+        }
+
+        type CompanyCustomer implements Customer {
+            "The display name of the customer. For companies, this is the company name and its form."
+            displayName: String!
+        }"""
+
+        when:
+        def schema = TestUtil.schema(sdl);
+
+        then:
+        schema != null
+
+    }
+
+    def "different argument descriptions on interface vs implementation should not cause an error "() {
+        given:
+        def sdl = """
+        type Query { hello: String }
+        
+        interface Customer {
+            displayName(
+            "interface arg"
+            arg: String
+            ): String!
+        }
+
+        type PersonCustomer implements Customer {
+            displayName(
+            "impl arg 1"
+            arg: String
+            ): String!
+        }
+
+        type CompanyCustomer implements Customer {
+            displayName(
+            arg: String
+            ): String!
+        }"""
+
+        when:
+        def schema = TestUtil.schema(sdl);
+
+        then:
+        schema != null
+
+    }
+
+    def "different argument comments on interface vs implementation should not cause an error "() {
+        given:
+        def sdl = """
+        type Query { hello: String }
+        
+        interface Customer {
+            displayName(
+            # interface arg
+            arg: String
+            ): String!
+        }
+
+        type PersonCustomer implements Customer {
+            displayName(
+            # impl arg 1
+            arg: String
+            ): String!
+        }
+
+        type CompanyCustomer implements Customer {
+            displayName(
+            arg: String
+            ): String!
+        }"""
+
+        when:
+        def schema = TestUtil.schema(sdl);
+
+        then:
+        schema != null
+
+    }
+
+    def "field in base interface type redefined in extension type should cause an error"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+            
+            interface Human {
+                id: ID!
+                name: String!
+            }
+            extend interface Human {
+                name: String!
+                friends: [String]
+            }
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "'Human' extension type [@n:n] tried to redefine field 'name' [@n:n]")
+
+    }
+
+    def "field in interface extension type redefined in another extension type should cause an error"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+            
+            interface Human {
+                id: ID!
+            }
+            
+            extend interface Human {
+                name: String!
+            }
+            
+            extend interface Human {
+                name: String!
+                friends: [String]
+            }
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "'Human' extension type [@n:n] tried to redefine field 'name' [@n:n]")
+
+    }
+
+    def "field in base input type redefined in extension type should cause an error"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+            
+            input Human {
+                id: ID!
+                name: String!
+            }
+            extend input Human {
+                name: String!
+                friends: [String]
+            }
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "'Human' extension type [@n:n] tried to redefine field 'name' [@n:n]")
+
+    }
+
+    def "union type name must not begin with '__'"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+
+            type Bar {
+                id : ID!
+            }
+            
+            type Foo {
+                id : ID!
+            }
+            
+            union __FooBar = Bar | Foo 
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "'__FooBar' must not begin with '__', which is reserved by GraphQL introspection.")
+    }
+
+    def "union type must include one or more member types"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+           
+            union UnionType 
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "Union type 'UnionType' must include one or more member types.")
+    }
+
+    def "The member types of a Union type must all be object base types"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+            
+            type A { hello: String }
+            
+            interface B { hello: String }
+            
+            union UnionType = A | B
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "The member types of a Union type must all be Object base types. member type 'B' in Union 'UnionType' is invalid.")
+    }
+
+    def "The member types of a Union type must be unique"() {
+        given:
+        def sdl = """
+            type Query { hello: String }
+            
+            type Bar {
+                id : ID!
+            }
+            
+            union DuplicateBar =  Bar | Bar
+        """
+
+        when:
+        def result = check(sdl)
+
+        then:
+        errorContaining(result, "member type 'Bar' in Union 'DuplicateBar' is not unique. The member types of a Union type must be unique.")
+    }
 }

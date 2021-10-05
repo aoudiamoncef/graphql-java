@@ -1,15 +1,20 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 import static graphql.language.NodeUtil.assertNewChildrenAreEmpty;
 
@@ -19,8 +24,8 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
     private final String value;
 
     @Internal
-    protected StringValue(String value, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected StringValue(String value, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.value = value;
     }
 
@@ -30,7 +35,7 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
      * @param value of the String
      */
     public StringValue(String value) {
-        this(value, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(value, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     public String getValue() {
@@ -39,8 +44,7 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
 
     @Override
     public List<Node> getChildren() {
-        List<Node> result = new ArrayList<>();
-        return result;
+        return emptyList();
     }
 
     @Override
@@ -78,12 +82,16 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
 
     @Override
     public StringValue deepCopy() {
-        return new StringValue(value, getSourceLocation(), getComments(), getIgnoredChars());
+        return new StringValue(value, getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
     public TraversalControl accept(TraverserContext<Node> context, NodeVisitor visitor) {
         return visitor.visitStringValue(this, context);
+    }
+
+    public static StringValue of(String value) {
+        return StringValue.newStringValue(value).build();
     }
 
     public static Builder newStringValue() {
@@ -103,17 +111,19 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
         private String value;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(StringValue existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.value = existing.getValue();
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -128,7 +138,7 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -137,9 +147,19 @@ public class StringValue extends AbstractNode<StringValue> implements ScalarValu
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
+
         public StringValue build() {
-            StringValue stringValue = new StringValue(value, sourceLocation, comments, ignoredChars);
-            return stringValue;
+            return new StringValue(value, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

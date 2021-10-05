@@ -4,7 +4,8 @@ import graphql.ExecutionInput;
 import graphql.ExecutionResult;
 import graphql.ExecutionResultImpl;
 import graphql.Internal;
-import graphql.ParseResult;
+import graphql.ParseAndValidate;
+import graphql.ParseAndValidateResult;
 import graphql.execution.AbortExecutionException;
 import graphql.execution.ExecutionId;
 import graphql.execution.ExecutionIdProvider;
@@ -22,11 +23,9 @@ import graphql.execution.preparsed.NoOpPreparsedDocumentProvider;
 import graphql.execution.preparsed.PreparsedDocumentEntry;
 import graphql.execution.preparsed.PreparsedDocumentProvider;
 import graphql.language.Document;
-import graphql.parser.InvalidSyntaxException;
-import graphql.parser.Parser;
 import graphql.schema.GraphQLSchema;
+import graphql.util.LogKit;
 import graphql.validation.ValidationError;
-import graphql.validation.Validator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,15 +33,16 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
 import static graphql.Assert.assertNotNull;
-import static graphql.execution.instrumentation.DocumentAndVariables.newDocumentAndVariables;
 
 @SuppressWarnings("Duplicates")
 @Internal
 public class GraphQL {
     private static final Logger log = LoggerFactory.getLogger(graphql.GraphQL.class);
+    private static final Logger logNotSafe = LogKit.getNotPrivacySafeLogger(ExecutionStrategy.class);
 
     private final GraphQLSchema graphQLSchema;
     private final ExecutionStrategy executionStrategy;
@@ -65,7 +65,6 @@ public class GraphQL {
      * which is the result of executing the provided query.
      *
      * @param executionInputBuilder {@link ExecutionInput.Builder}
-     *
      * @return an {@link ExecutionResult} which can include errors
      */
     public ExecutionResult execute(ExecutionInput.Builder executionInputBuilder) {
@@ -86,7 +85,6 @@ public class GraphQL {
      * </pre>
      *
      * @param builderFunction a function that is given a {@link ExecutionInput.Builder}
-     *
      * @return a promise to an {@link ExecutionResult} which can include errors
      */
     public CompletableFuture<ExecutionResult> execute(UnaryOperator<ExecutionInput.Builder> builderFunction) {
@@ -100,7 +98,6 @@ public class GraphQL {
      * which is the result of executing the provided query.
      *
      * @param executionInput {@link ExecutionInput}
-     *
      * @return a promise to an {@link ExecutionResult} which can include errors
      */
     public ExecutionResult execute(ExecutionInput executionInput) {
@@ -114,7 +111,6 @@ public class GraphQL {
      * which is the result of executing the provided query.
      *
      * @param executionInputBuilder {@link ExecutionInput.Builder}
-     *
      * @return a promise to an {@link ExecutionResult} which can include errors
      */
     public CompletableFuture<ExecutionResult> executeAsync(ExecutionInput.Builder executionInputBuilder) {
@@ -135,7 +131,6 @@ public class GraphQL {
      * </pre>
      *
      * @param builderFunction a function that is given a {@link ExecutionInput.Builder}
-     *
      * @return a promise to an {@link ExecutionResult} which can include errors
      */
     public CompletableFuture<ExecutionResult> executeAsync(UnaryOperator<ExecutionInput.Builder> builderFunction) {
@@ -149,12 +144,13 @@ public class GraphQL {
      * which is the result of executing the provided query.
      *
      * @param executionInput {@link ExecutionInput}
-     *
      * @return a promise to an {@link ExecutionResult} which can include errors
      */
     public CompletableFuture<ExecutionResult> executeAsync(ExecutionInput executionInput) {
         try {
-            log.debug("Executing request. operation name: '{}'. query: '{}'. variables '{}'", executionInput.getOperationName(), executionInput.getQuery(), executionInput.getVariables());
+            if (logNotSafe.isDebugEnabled()) {
+                logNotSafe.debug("Executing request. operation name: '{}'. query: '{}'. variables '{}'", executionInput.getOperationName(), executionInput.getQuery(), executionInput.getVariables());
+            }
 
             InstrumentationState instrumentationState = instrumentation.createState(new InstrumentationCreateStateParameters(this.graphQLSchema, executionInput));
 
@@ -181,32 +177,42 @@ public class GraphQL {
 
     private CompletableFuture<ExecutionResult> parseValidateAndExecute(ExecutionInput executionInput, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
         AtomicReference<ExecutionInput> executionInputRef = new AtomicReference<>(executionInput);
-        PreparsedDocumentEntry preparsedDoc = preparsedDocumentProvider.get(executionInput.getQuery(),
-                transformedQuery -> {
-                    // if they change the original query in the pre-parser, then we want to see it downstream from then on
-                    executionInputRef.set(executionInput.transform(bldr -> bldr.query(transformedQuery)));
-                    return parseAndValidate(executionInputRef.get(), graphQLSchema, instrumentationState);
-                });
+        Function<ExecutionInput, PreparsedDocumentEntry> computeFunction = transformedInput -> {
+            // if they change the original query in the pre-parser, then we want to see it downstream from then on
+            executionInputRef.set(transformedInput);
+            return parseAndValidate(executionInputRef, graphQLSchema, instrumentationState);
+        };
+        PreparsedDocumentEntry preparsedDoc = preparsedDocumentProvider.getDocument(executionInput, computeFunction);
         if (preparsedDoc.hasErrors()) {
             return CompletableFuture.completedFuture(new ExecutionResultImpl(preparsedDoc.getErrors()));
         }
-
         return execute(executionInputRef.get(), preparsedDoc.getDocument(), graphQLSchema, instrumentationState);
     }
 
-    private PreparsedDocumentEntry parseAndValidate(ExecutionInput executionInput, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
-        log.debug("Parsing query: '{}'...", executionInput.getQuery());
-        ParseResult parseResult = parse(executionInput, graphQLSchema, instrumentationState);
+    private PreparsedDocumentEntry parseAndValidate(AtomicReference<ExecutionInput> executionInputRef, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
+
+        ExecutionInput executionInput = executionInputRef.get();
+        String query = executionInput.getQuery();
+
+        if (logNotSafe.isDebugEnabled()) {
+            logNotSafe.debug("Parsing query: '{}'...", query);
+        }
+        ParseAndValidateResult parseResult = parse(executionInput, graphQLSchema, instrumentationState);
         if (parseResult.isFailure()) {
-            log.warn("Query failed to parse : '{}'", executionInput.getQuery());
-            return new PreparsedDocumentEntry(parseResult.getException().toInvalidSyntaxError());
+            logNotSafe.warn("Query failed to parse : '{}'", executionInput.getQuery());
+            return new PreparsedDocumentEntry(parseResult.getSyntaxException().toInvalidSyntaxError());
         } else {
             final Document document = parseResult.getDocument();
+            // they may have changed the document and the variables via instrumentation so update the reference to it
+            executionInput = executionInput.transform(builder -> builder.variables(parseResult.getVariables()));
+            executionInputRef.set(executionInput);
 
-            log.debug("Validating query: '{}'", executionInput.getQuery());
+            if (logNotSafe.isDebugEnabled()) {
+                logNotSafe.debug("Validating query: '{}'", query);
+            }
             final List<ValidationError> errors = validate(executionInput, document, graphQLSchema, instrumentationState);
             if (!errors.isEmpty()) {
-                log.warn("Query failed to validate : '{}'", executionInput.getQuery());
+                logNotSafe.warn("Query failed to validate : '{}'", query);
                 return new PreparsedDocumentEntry(errors);
             }
 
@@ -214,56 +220,62 @@ public class GraphQL {
         }
     }
 
-    private ParseResult parse(ExecutionInput executionInput, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
+    private ParseAndValidateResult parse(ExecutionInput executionInput, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
         InstrumentationExecutionParameters parameters = new InstrumentationExecutionParameters(executionInput, graphQLSchema, instrumentationState);
         InstrumentationContext<Document> parseInstrumentation = instrumentation.beginParse(parameters);
+        CompletableFuture<Document> documentCF = new CompletableFuture<>();
+        parseInstrumentation.onDispatched(documentCF);
 
-        Parser parser = new Parser();
-        Document document;
-        DocumentAndVariables documentAndVariables;
-        try {
-            document = parser.parseDocument(executionInput.getQuery());
-            documentAndVariables = newDocumentAndVariables()
-                    .document(document).variables(executionInput.getVariables()).build();
+        ParseAndValidateResult parseResult = ParseAndValidate.parse(executionInput);
+        if (parseResult.isFailure()) {
+            parseInstrumentation.onCompleted(null, parseResult.getSyntaxException());
+            return parseResult;
+        } else {
+            documentCF.complete(parseResult.getDocument());
+            parseInstrumentation.onCompleted(parseResult.getDocument(), null);
+
+            DocumentAndVariables documentAndVariables = parseResult.getDocumentAndVariables();
             documentAndVariables = instrumentation.instrumentDocumentAndVariables(documentAndVariables, parameters);
-        } catch (InvalidSyntaxException e) {
-            parseInstrumentation.onCompleted(null, e);
-            return ParseResult.ofError(e);
+            return ParseAndValidateResult.newResult()
+                    .document(documentAndVariables.getDocument()).variables(documentAndVariables.getVariables()).build();
         }
-
-        parseInstrumentation.onCompleted(documentAndVariables.getDocument(), null);
-        return ParseResult.of(documentAndVariables);
     }
 
     private List<ValidationError> validate(ExecutionInput executionInput, Document document, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
         InstrumentationContext<List<ValidationError>> validationCtx = instrumentation.beginValidation(new InstrumentationValidationParameters(executionInput, document, graphQLSchema, instrumentationState));
+        CompletableFuture<List<ValidationError>> cf = new CompletableFuture<>();
+        validationCtx.onDispatched(cf);
 
-        Validator validator = new Validator();
-        List<ValidationError> validationErrors = validator.validateDocument(graphQLSchema, document);
+        List<ValidationError> validationErrors = ParseAndValidate.validate(graphQLSchema, document);
 
         validationCtx.onCompleted(validationErrors, null);
+        cf.complete(validationErrors);
         return validationErrors;
     }
 
     private CompletableFuture<ExecutionResult> execute(ExecutionInput executionInput, Document document, GraphQLSchema graphQLSchema, InstrumentationState instrumentationState) {
         String query = executionInput.getQuery();
         String operationName = executionInput.getOperationName();
-        Object context = executionInput.getContext();
+        Object context = executionInput.getGraphQLContext();
 
         Execution execution = new Execution();
         ExecutionId executionId = idProvider.provide(query, operationName, context);
 
-        log.debug("Executing '{}'. operation name: '{}'. query: '{}'. variables '{}'", executionId, executionInput.getOperationName(), executionInput.getQuery(), executionInput.getVariables());
+        if (logNotSafe.isDebugEnabled()) {
+            logNotSafe.debug("Executing '{}'. operation name: '{}'. query: '{}'. variables '{}'", executionId, executionInput.getOperationName(), executionInput.getQuery(), executionInput.getVariables());
+        }
         CompletableFuture<ExecutionResult> future = execution.execute(executionStrategy, document, graphQLSchema, executionId, executionInput, instrumentationState);
         future = future.whenComplete((result, throwable) -> {
             if (throwable != null) {
                 log.error(String.format("Execution '%s' threw exception when executing : query : '%s'. variables '%s'", executionId, executionInput.getQuery(), executionInput.getVariables()), throwable);
             } else {
-                int errorCount = result.getErrors().size();
-                if (errorCount > 0) {
-                    log.debug("Execution '{}' completed with '{}' errors", executionId, errorCount);
-                } else {
-                    log.debug("Execution '{}' completed with zero errors", executionId);
+                if (log.isDebugEnabled()) {
+                    int errorCount = result.getErrors().size();
+                    if (errorCount > 0) {
+                        log.debug("Execution '{}' completed with '{}' errors", executionId, errorCount);
+                    } else {
+                        log.debug("Execution '{}' completed with zero errors", executionId);
+                    }
                 }
             }
         });
@@ -274,7 +286,6 @@ public class GraphQL {
      * Helps you build a GraphQL object ready to execute queries
      *
      * @param graphQLSchema the schema to use
-     *
      * @return a builder of GraphQL objects
      */
     public static Builder newGraphQL(GraphQLSchema graphQLSchema) {
@@ -286,7 +297,6 @@ public class GraphQL {
      * the current values and allows you to transform it how you want.
      *
      * @param builderConsumer the consumer code that will be given a builder to transform
-     *
      * @return a new GraphQL object based on calling build on that builder
      */
     public GraphQL transform(Consumer<Builder> builderConsumer) {
@@ -317,32 +327,32 @@ public class GraphQL {
         }
 
         public Builder schema(GraphQLSchema graphQLSchema) {
-            this.graphQLSchema = assertNotNull(graphQLSchema, "GraphQLSchema must be non null");
+            this.graphQLSchema = assertNotNull(graphQLSchema, () -> "GraphQLSchema must be non null");
             return this;
         }
 
         public Builder executionStrategy(ExecutionStrategy executionStrategy) {
-            this.executionStrategy = assertNotNull(executionStrategy, "ExecutionStrategy must be non null");
+            this.executionStrategy = assertNotNull(executionStrategy, () -> "ExecutionStrategy must be non null");
             return this;
         }
 
         public Builder instrumentation(Instrumentation instrumentation) {
-            this.instrumentation = assertNotNull(instrumentation, "Instrumentation must be non null");
+            this.instrumentation = assertNotNull(instrumentation, () -> "Instrumentation must be non null");
             return this;
         }
 
         public Builder preparsedDocumentProvider(PreparsedDocumentProvider preparsedDocumentProvider) {
-            this.preparsedDocumentProvider = assertNotNull(preparsedDocumentProvider, "PreparsedDocumentProvider must be non null");
+            this.preparsedDocumentProvider = assertNotNull(preparsedDocumentProvider, () -> "PreparsedDocumentProvider must be non null");
             return this;
         }
 
         public Builder executionIdProvider(ExecutionIdProvider executionIdProvider) {
-            this.idProvider = assertNotNull(executionIdProvider, "ExecutionIdProvider must be non null");
+            this.idProvider = assertNotNull(executionIdProvider, () -> "ExecutionIdProvider must be non null");
             return this;
         }
 
         public GraphQL build() {
-            assertNotNull(graphQLSchema, "graphQLSchema must be non null");
+            assertNotNull(graphQLSchema, () -> "graphQLSchema must be non null");
             return new GraphQL(this);
         }
     }

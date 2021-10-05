@@ -44,7 +44,7 @@ public abstract class TraverserState<T> {
                 childrenMap.keySet().forEach(key -> {
                     List<U> children = childrenMap.get(key);
                     for (int i = children.size() - 1; i >= 0; i--) {
-                        U child = assertNotNull(children.get(i), "null child for key " + key);
+                        U child = assertNotNull(children.get(i), () -> "null child for key " + key);
                         NodeLocation nodeLocation = new NodeLocation(key, i);
                         DefaultTraverserContext<U> context = super.newContext(child, traverserContext, nodeLocation);
                         super.state.push(context);
@@ -72,7 +72,7 @@ public abstract class TraverserState<T> {
                 childrenMap.keySet().forEach(key -> {
                     List<U> children = childrenMap.get(key);
                     for (int i = 0; i < children.size(); i++) {
-                        U child = assertNotNull(children.get(i), "null child for key " + key);
+                        U child = assertNotNull(children.get(i), () -> "null child for key " + key);
                         NodeLocation nodeLocation = new NodeLocation(key, i);
                         DefaultTraverserContext<U> context = super.newContext(child, traverserContext, nodeLocation);
                         childrenContextMap.computeIfAbsent(key, notUsed -> new ArrayList<>());
@@ -140,6 +140,6 @@ public abstract class TraverserState<T> {
                                                       NodeLocation nodeLocation,
                                                       boolean isRootContext) {
         assertNotNull(vars);
-        return new DefaultTraverserContext<>(curNode, parent, visited, vars, sharedContextData, nodeLocation, isRootContext);
+        return new DefaultTraverserContext<>(curNode, parent, visited, vars, sharedContextData, nodeLocation, isRootContext, false);
     }
 }

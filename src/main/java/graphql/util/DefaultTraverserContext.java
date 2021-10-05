@@ -1,6 +1,8 @@
 package graphql.util;
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
+import graphql.collect.ImmutableKit;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +31,10 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
     private Object curAccValue;
     private final NodeLocation location;
     private final boolean isRootContext;
+    private boolean parallel;
     private Map<String, List<TraverserContext<T>>> children;
+    private Phase phase;
+    private final List<Breadcrumb<T>> breadcrumbs;
 
     public DefaultTraverserContext(T curNode,
                                    TraverserContext<T> parent,
@@ -37,7 +42,8 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
                                    Map<Class<?>, Object> vars,
                                    Object sharedContextData,
                                    NodeLocation location,
-                                   boolean isRootContext) {
+                                   boolean isRootContext,
+                                   boolean parallel) {
         this.curNode = curNode;
         this.parent = parent;
         this.visited = visited;
@@ -45,19 +51,30 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
         this.sharedContextData = sharedContextData;
         this.location = location;
         this.isRootContext = isRootContext;
+        this.parallel = parallel;
+
+        if (parent == null || parent.isRootContext()) {
+            this.breadcrumbs = ImmutableKit.emptyList();
+        } else {
+            this.breadcrumbs = ImmutableList.<Breadcrumb<T>>builderWithExpectedSize(parent.getBreadcrumbs().size() + 1)
+                    .add(new Breadcrumb<>(this.parent.thisNode(), this.location))
+                    .addAll(parent.getBreadcrumbs())
+                    .build();
+
+        }
     }
 
     public static <T> DefaultTraverserContext<T> dummy() {
-        return new DefaultTraverserContext<>(null, null, null, null, null, null, true);
+        return new DefaultTraverserContext<>(null, null, null, null, null, null, true, false);
     }
 
     public static <T> DefaultTraverserContext<T> simple(T node) {
-        return new DefaultTraverserContext<>(node, null, null, null, null, null, true);
+        return new DefaultTraverserContext<>(node, null, null, null, null, null, true, false);
     }
 
     @Override
     public T thisNode() {
-        assertFalse(this.nodeDeleted, "node is deleted");
+        assertFalse(this.nodeDeleted, () -> "node is deleted");
         if (newNode != null) {
             return newNode;
         }
@@ -72,14 +89,15 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
     @Override
     public void changeNode(T newNode) {
         assertNotNull(newNode);
-        assertFalse(this.nodeDeleted, "node is deleted");
+        assertFalse(this.nodeDeleted, () -> "node is deleted");
         this.newNode = newNode;
     }
 
+
     @Override
     public void deleteNode() {
-        assertNull(this.newNode, "node is already changed");
-        assertFalse(this.nodeDeleted, "node is already deleted");
+        assertNull(this.newNode, () -> "node is already changed");
+        assertFalse(this.nodeDeleted, () -> "node is already deleted");
         this.nodeDeleted = true;
     }
 
@@ -87,6 +105,12 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
     public boolean isDeleted() {
         return this.nodeDeleted;
     }
+
+    @Override
+    public boolean isChanged() {
+        return this.newNode != null;
+    }
+
 
     @Override
     public TraverserContext<T> getParentContext() {
@@ -106,15 +130,7 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
 
     @Override
     public List<Breadcrumb<T>> getBreadcrumbs() {
-        List<Breadcrumb<T>> result = new ArrayList<>();
-        TraverserContext<T> curContext = parent;
-        NodeLocation childLocation = this.location;
-        while (!curContext.isRootContext()) {
-            result.add(new Breadcrumb<>(curContext.thisNode(), childLocation));
-            childLocation = curContext.getLocation();
-            curContext = curContext.getParentContext();
-        }
-        return result;
+        return breadcrumbs;
     }
 
     @Override
@@ -207,13 +223,31 @@ public class DefaultTraverserContext<T> implements TraverserContext<T> {
      * PRIVATE: Used by {@link Traverser}
      */
     void setChildrenContexts(Map<String, List<TraverserContext<T>>> children) {
-        assertTrue(this.children == null, "children already set");
+        assertTrue(this.children == null, () -> "children already set");
         this.children = children;
     }
 
+
     @Override
     public Map<String, List<TraverserContext<T>>> getChildrenContexts() {
-        assertNotNull(children, "children not available");
+        assertNotNull(children, () -> "children not available");
         return children;
+    }
+
+    /*
+     * PRIVATE: Used by {@link Traverser}
+     */
+    void setPhase(Phase phase) {
+        this.phase = phase;
+    }
+
+    @Override
+    public Phase getPhase() {
+        return phase;
+    }
+
+    @Override
+    public boolean isParallel() {
+        return parallel;
     }
 }

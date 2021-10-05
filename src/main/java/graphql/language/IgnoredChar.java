@@ -5,6 +5,12 @@ import graphql.PublicApi;
 import java.io.Serializable;
 import java.util.Objects;
 
+/**
+ * Graphql syntax has a series of characters, such as spaces, new lines and commas that are not considered relevant
+ * to the syntax.  However they can be captured and associated with the AST elements they belong to.
+ *
+ * This costs more memory but for certain use cases (like editors) this maybe be useful
+ */
 @PublicApi
 public class IgnoredChar implements Serializable {
 
@@ -60,6 +66,10 @@ public class IgnoredChar implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(value, kind, sourceLocation);
+        int result = 1;
+        result = 31 * result + Objects.hashCode(value);
+        result = 31 * result + Objects.hashCode(kind);
+        result = 31 * result + Objects.hashCode(sourceLocation);
+        return result;
     }
 }

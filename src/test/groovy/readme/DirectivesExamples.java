@@ -7,10 +7,8 @@ import graphql.Scalars;
 import graphql.schema.DataFetcher;
 import graphql.schema.DataFetcherFactories;
 import graphql.schema.DataFetchingEnvironment;
-import graphql.schema.FieldCoordinates;
 import graphql.schema.GraphQLArgument;
 import graphql.schema.GraphQLFieldDefinition;
-import graphql.schema.GraphQLFieldsContainer;
 import graphql.schema.GraphQLSchema;
 import graphql.schema.idl.RuntimeWiring;
 import graphql.schema.idl.SchemaDirectiveWiring;
@@ -41,14 +39,12 @@ public class DirectivesExamples {
 
         @Override
         public GraphQLFieldDefinition onField(SchemaDirectiveWiringEnvironment<GraphQLFieldDefinition> environment) {
-            String targetAuthRole = (String) environment.getDirective().getArgument("role").getValue();
+            String targetAuthRole = (String) environment.getDirective().getArgument("role").getArgumentValue().getValue();
 
-            GraphQLFieldDefinition field = environment.getElement();
-            GraphQLFieldsContainer parentType = environment.getFieldsContainer();
             //
             // build a data fetcher that first checks authorisation roles before then calling the original data fetcher
             //
-            DataFetcher originalDataFetcher = environment.getCodeRegistry().getDataFetcher(parentType, field);
+            DataFetcher originalDataFetcher = environment.getFieldDataFetcher();
             DataFetcher authDataFetcher = new DataFetcher() {
                 @Override
                 public Object get(DataFetchingEnvironment dataFetchingEnvironment) throws Exception {
@@ -64,9 +60,7 @@ public class DirectivesExamples {
             };
             //
             // now change the field definition to have the new authorising data fetcher
-            FieldCoordinates coordinates = FieldCoordinates.coordinates(parentType, field);
-            environment.getCodeRegistry().dataFetcher(coordinates, authDataFetcher);
-            return field;
+            return environment.setFieldDataFetcher(authDataFetcher);
         }
     }
 
@@ -89,7 +83,7 @@ public class DirectivesExamples {
 
         ExecutionInput executionInput = ExecutionInput.newExecutionInput()
                 .query(query)
-                .context(authCtx)
+                .graphQLContext(builder -> builder.put("authCtx", authCtx))
                 .build();
     }
 
@@ -98,12 +92,11 @@ public class DirectivesExamples {
         @Override
         public GraphQLFieldDefinition onField(SchemaDirectiveWiringEnvironment<GraphQLFieldDefinition> environment) {
             GraphQLFieldDefinition field = environment.getElement();
-            GraphQLFieldsContainer parentType = environment.getFieldsContainer();
             //
             // DataFetcherFactories.wrapDataFetcher is a helper to wrap data fetchers so that CompletionStage is handled correctly
             // along with POJOs
             //
-            DataFetcher originalFetcher = environment.getCodeRegistry().getDataFetcher(parentType, field);
+            DataFetcher originalFetcher = environment.getFieldDataFetcher();
             DataFetcher dataFetcher = DataFetcherFactories.wrapDataFetcher(originalFetcher, ((dataFetchingEnvironment, value) -> {
                 DateTimeFormatter dateTimeFormatter = buildFormatter(dataFetchingEnvironment.getArgument("format"));
                 if (value instanceof LocalDateTime) {
@@ -117,8 +110,7 @@ public class DirectivesExamples {
             // which allows clients to opt into that as well as wrapping the base data fetcher so it
             // performs the formatting over top of the base values.
             //
-            FieldCoordinates coordinates = FieldCoordinates.coordinates(parentType, field);
-            environment.getCodeRegistry().dataFetcher(coordinates, dataFetcher);
+            environment.setFieldDataFetcher(dataFetcher);
 
             return field.transform(builder -> builder
                     .argument(GraphQLArgument
@@ -140,6 +132,8 @@ public class DirectivesExamples {
     static GraphQLSchema buildSchema() {
 
         String sdlSpec = "" +
+                "directive @dateFormat on FIELD_DEFINITION\n" +
+                "" +
                 "type Query {\n" +
                 "    dateField : String @dateFormat \n" +
                 "}";

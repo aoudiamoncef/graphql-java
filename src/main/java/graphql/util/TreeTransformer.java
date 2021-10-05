@@ -4,6 +4,8 @@ package graphql.util;
 import graphql.PublicApi;
 
 import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 
 import static graphql.Assert.assertNotNull;
@@ -24,7 +26,6 @@ public class TreeTransformer<T> {
     public T transform(T root, TraverserVisitor<T> traverserVisitor, Map<Class<?>, Object> rootVars) {
         assertNotNull(root);
 
-        NodeMultiZipper<T> astMultiZipper = new NodeMultiZipper<>(root, Collections.emptyList(), nodeAdapter);
 
         TraverserVisitor<T> nodeTraverserVisitor = new TraverserVisitor<T>() {
 
@@ -40,12 +41,20 @@ public class TreeTransformer<T> {
             public TraversalControl leave(TraverserContext<T> context) {
                 return traverserVisitor.leave(context);
             }
+
+            @Override
+            public TraversalControl backRef(TraverserContext<T> context) {
+                return traverserVisitor.backRef(context);
+            }
         };
 
-        Traverser<T> traverser = Traverser.depthFirstWithNamedChildren(nodeAdapter::getNamedChildren, null, astMultiZipper);
+        List<NodeZipper<T>> zippers = new LinkedList<>();
+        Traverser<T> traverser = Traverser.depthFirstWithNamedChildren(nodeAdapter::getNamedChildren, zippers, null);
         traverser.rootVars(rootVars);
+        traverser.traverse(root, nodeTraverserVisitor);
 
-        NodeMultiZipper<T> multiZipperResult = (NodeMultiZipper<T>) traverser.traverse(root, nodeTraverserVisitor).getAccumulatedResult();
-        return multiZipperResult.toRootNode();
+        NodeMultiZipper<T> multiZipper = NodeMultiZipper.newNodeMultiZipperTrusted(root, zippers, nodeAdapter);
+        return multiZipper.toRootNode();
     }
+
 }

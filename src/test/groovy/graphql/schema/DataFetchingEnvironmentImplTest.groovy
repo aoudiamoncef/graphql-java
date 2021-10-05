@@ -1,10 +1,10 @@
 package graphql.schema
 
-
+import graphql.GraphQLContext
+import graphql.cachecontrol.CacheControl
 import graphql.execution.ExecutionId
 import graphql.execution.ExecutionStepInfo
 import graphql.language.FragmentDefinition
-import graphql.language.IgnoredChars
 import graphql.language.OperationDefinition
 import graphql.language.TypeName
 import org.dataloader.BatchLoader
@@ -21,7 +21,7 @@ import static graphql.schema.DataFetchingEnvironmentImpl.newDataFetchingEnvironm
 
 class DataFetchingEnvironmentImplTest extends Specification {
 
-    def frag = new FragmentDefinition("frag", new TypeName("t"), [], null, null, [], new IgnoredChars([], []))
+    def frag = FragmentDefinition.newFragmentDefinition().name("frag").typeCondition(new TypeName("t")).build()
 
     def dataLoader = DataLoader.newDataLoader({ keys -> CompletableFuture.completedFuture(keys) } as BatchLoader)
     def operationDefinition = new OperationDefinition("q")
@@ -30,10 +30,12 @@ class DataFetchingEnvironmentImplTest extends Specification {
     def fragmentByName = [frag: frag]
     def variables = [var: "able"]
     def dataLoaderRegistry = new DataLoaderRegistry().register("dataLoader", dataLoader)
+    def cacheControl = CacheControl.newCacheControl()
 
     def executionContext = newExecutionContextBuilder()
             .root("root")
             .context("context")
+            .graphQLContext(GraphQLContext.of(["key":"context"]))
             .executionId(executionId)
             .operationDefinition(operationDefinition)
             .document(document)
@@ -41,6 +43,7 @@ class DataFetchingEnvironmentImplTest extends Specification {
             .graphQLSchema(starWarsSchema)
             .fragmentsByName(fragmentByName)
             .dataLoaderRegistry(dataLoaderRegistry)
+            .cacheControl(cacheControl)
             .build()
 
 
@@ -54,9 +57,8 @@ class DataFetchingEnvironmentImplTest extends Specification {
         value == "argVal"
         when:
         dataFetchingEnvironment.getArguments().put("arg", "some other value")
-        value = dataFetchingEnvironment.getArguments().get("arg")
         then:
-        value == "argVal"
+        thrown(UnsupportedOperationException)
     }
 
     def "copying works as expected from execution context"() {
@@ -67,6 +69,7 @@ class DataFetchingEnvironmentImplTest extends Specification {
         then:
         dfe.getRoot() == "root"
         dfe.getContext() == "context"
+        dfe.getGraphQlContext().get("key") == "context"
         dfe.getGraphQLSchema() == starWarsSchema
         dfe.getDocument() == document
         dfe.getVariables() == variables
@@ -78,6 +81,7 @@ class DataFetchingEnvironmentImplTest extends Specification {
     def "create environment from existing one will copy everything to new instance"() {
         def dfe = newDataFetchingEnvironment()
                 .context("Test Context")
+                .graphQLContext(GraphQLContext.of(["key": "context"]))
                 .source("Test Source")
                 .root("Test Root")
                 .fieldDefinition(Mock(GraphQLFieldDefinition))
@@ -85,13 +89,16 @@ class DataFetchingEnvironmentImplTest extends Specification {
                 .executionStepInfo(Mock(ExecutionStepInfo))
                 .parentType(Mock(GraphQLType))
                 .graphQLSchema(Mock(GraphQLSchema))
-                .fragmentsByName(Mock(Map))
+                .fragmentsByName(fragmentByName)
                 .executionId(Mock(ExecutionId))
                 .selectionSet(Mock(DataFetchingFieldSelectionSet))
                 .operationDefinition(operationDefinition)
                 .document(document)
                 .variables(variables)
                 .dataLoaderRegistry(dataLoaderRegistry)
+                .cacheControl(cacheControl)
+                .locale(Locale.CANADA)
+                .localContext("localContext")
                 .build()
 
         when:
@@ -100,6 +107,7 @@ class DataFetchingEnvironmentImplTest extends Specification {
         then:
         dfe != dfeCopy
         dfe.getContext() == dfeCopy.getContext()
+        dfe.getGraphQlContext() == dfeCopy.getGraphQlContext()
         dfe.getSource() == dfeCopy.getSource()
         dfe.getRoot() == dfeCopy.getRoot()
         dfe.getFieldDefinition() == dfeCopy.getFieldDefinition()
@@ -114,6 +122,20 @@ class DataFetchingEnvironmentImplTest extends Specification {
         dfe.getOperationDefinition() == dfeCopy.getOperationDefinition()
         dfe.getVariables() == dfeCopy.getVariables()
         dfe.getDataLoader("dataLoader") == dataLoader
+        dfe.getCacheControl() == cacheControl
+        dfe.getLocale() == dfeCopy.getLocale()
+        dfe.getLocalContext() == dfeCopy.getLocalContext()
     }
 
+    def "get or default support"() {
+        when:
+        def dfe = newDataFetchingEnvironment(executionContext)
+                .arguments([x: "y"])
+                .build()
+        then:
+        dfe.getArgument("z") == null
+        dfe.getArgumentOrDefault("z", "default") == "default"
+        dfe.getArgument("x") == "y"
+        dfe.getArgumentOrDefault("x", "default") == "y"
+    }
 }

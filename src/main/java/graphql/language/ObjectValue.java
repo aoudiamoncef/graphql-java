@@ -1,28 +1,33 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
 public class ObjectValue extends AbstractNode<ObjectValue> implements Value<ObjectValue> {
 
-    private final List<ObjectField> objectFields = new ArrayList<>();
+    private final ImmutableList<ObjectField> objectFields;
 
     public static final String CHILD_OBJECT_FIELDS = "objectFields";
 
     @Internal
-    protected ObjectValue(List<ObjectField> objectFields, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
-        this.objectFields.addAll(objectFields);
+    protected ObjectValue(List<ObjectField> objectFields, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
+        this.objectFields = ImmutableList.copyOf(objectFields);
     }
 
     /**
@@ -31,18 +36,16 @@ public class ObjectValue extends AbstractNode<ObjectValue> implements Value<Obje
      * @param objectFields the list of field that make up this object value
      */
     public ObjectValue(List<ObjectField> objectFields) {
-        this(objectFields, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(objectFields, null, emptyList(), IgnoredChars.EMPTY, ImmutableKit.emptyMap());
     }
 
     public List<ObjectField> getObjectFields() {
-        return new ArrayList<>(objectFields);
+        return objectFields;
     }
 
     @Override
     public List<Node> getChildren() {
-        List<Node> result = new ArrayList<>();
-        result.addAll(objectFields);
-        return result;
+        return ImmutableList.copyOf(objectFields);
     }
 
     @Override
@@ -68,15 +71,13 @@ public class ObjectValue extends AbstractNode<ObjectValue> implements Value<Obje
             return false;
         }
 
-        ObjectValue that = (ObjectValue) o;
-
         return true;
 
     }
 
     @Override
     public ObjectValue deepCopy() {
-        return new ObjectValue(deepCopy(objectFields), getSourceLocation(), getComments(), getIgnoredChars());
+        return new ObjectValue(deepCopy(objectFields), getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
 
@@ -105,17 +106,19 @@ public class ObjectValue extends AbstractNode<ObjectValue> implements Value<Obje
 
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
-        private List<ObjectField> objectFields = new ArrayList<>();
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<ObjectField> objectFields = emptyList();
+        private ImmutableList<Comment> comments = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(ObjectValue existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
-            this.objectFields = existing.getObjectFields();
+            this.comments = ImmutableList.copyOf(existing.getComments());
+            this.objectFields = ImmutableList.copyOf(existing.getObjectFields());
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
         public Builder sourceLocation(SourceLocation sourceLocation) {
@@ -124,17 +127,17 @@ public class ObjectValue extends AbstractNode<ObjectValue> implements Value<Obje
         }
 
         public Builder objectFields(List<ObjectField> objectFields) {
-            this.objectFields = objectFields;
+            this.objectFields = ImmutableList.copyOf(objectFields);
             return this;
         }
 
         public Builder objectField(ObjectField objectField) {
-            this.objectFields.add(objectField);
+            this.objectFields = ImmutableKit.addToList(objectFields, objectField);
             return this;
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -143,9 +146,18 @@ public class ObjectValue extends AbstractNode<ObjectValue> implements Value<Obje
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public ObjectValue build() {
-            ObjectValue objectValue = new ObjectValue(objectFields, sourceLocation, comments, ignoredChars);
-            return objectValue;
+            return new ObjectValue(objectFields, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

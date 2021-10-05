@@ -4,11 +4,11 @@ import graphql.ExecutionInput;
 import graphql.Internal;
 import graphql.execution.ExecutionContext;
 import graphql.execution.ExecutionId;
-import graphql.execution.ExecutionPath;
 import graphql.execution.ExecutionStepInfo;
 import graphql.execution.FieldCollector;
 import graphql.execution.FieldCollectorParameters;
 import graphql.execution.MergedSelectionSet;
+import graphql.execution.ResultPath;
 import graphql.execution.ValuesResolver;
 import graphql.execution.instrumentation.InstrumentationState;
 import graphql.language.Document;
@@ -32,7 +32,6 @@ public class ExecutionHelper {
 
     public static class ExecutionData {
         public ExecutionContext executionContext;
-        public FieldSubSelection fieldSubSelection;
     }
 
     public ExecutionData createExecutionData(Document document,
@@ -50,13 +49,14 @@ public class ExecutionHelper {
         List<VariableDefinition> variableDefinitions = operationDefinition.getVariableDefinitions();
 
         Map<String, Object> coercedVariables;
-        coercedVariables = valuesResolver.coerceArgumentValues(graphQLSchema, variableDefinitions, inputVariables);
+        coercedVariables = valuesResolver.coerceVariableValues(graphQLSchema, variableDefinitions, inputVariables);
 
         ExecutionContext executionContext = newExecutionContextBuilder()
                 .executionId(executionId)
                 .instrumentationState(instrumentationState)
                 .graphQLSchema(graphQLSchema)
                 .context(executionInput.getContext())
+                .graphQLContext(executionInput.getGraphQLContext())
                 .root(executionInput.getRoot())
                 .fragmentsByName(fragmentsByName)
                 .variables(coercedVariables)
@@ -64,28 +64,33 @@ public class ExecutionHelper {
                 .operationDefinition(operationDefinition)
                 .build();
 
-        GraphQLObjectType operationRootType;
-        operationRootType = Common.getOperationRootType(executionContext.getGraphQLSchema(), operationDefinition);
+        ExecutionData executionData = new ExecutionData();
+        executionData.executionContext = executionContext;
+        return executionData;
+
+    }
+
+    public FieldSubSelection getFieldSubSelection(ExecutionContext executionContext) {
+        OperationDefinition operationDefinition = executionContext.getOperationDefinition();
+        GraphQLObjectType operationRootType = Common.getOperationRootType(executionContext.getGraphQLSchema(), operationDefinition);
+
         FieldCollectorParameters collectorParameters = FieldCollectorParameters.newParameters()
                 .schema(executionContext.getGraphQLSchema())
                 .objectType(operationRootType)
                 .fragments(executionContext.getFragmentsByName())
                 .variables(executionContext.getVariables())
                 .build();
+
         MergedSelectionSet mergedSelectionSet = fieldCollector.collectFields(collectorParameters, operationDefinition.getSelectionSet());
-        ExecutionStepInfo executionInfo = newExecutionStepInfo().type(operationRootType).path(ExecutionPath.rootPath()).build();
+        ExecutionStepInfo executionInfo = newExecutionStepInfo().type(operationRootType).path(ResultPath.rootPath()).build();
 
         FieldSubSelection fieldSubSelection = FieldSubSelection.newFieldSubSelection()
-                .source(executionInput.getRoot())
-                .localContext(executionInput.getContext())
+                .source(executionContext.getRoot())
+                .localContext(executionContext.getLocalContext())
                 .mergedSelectionSet(mergedSelectionSet)
                 .executionInfo(executionInfo)
                 .build();
-
-        ExecutionData executionData = new ExecutionData();
-        executionData.executionContext = executionContext;
-        executionData.fieldSubSelection = fieldSubSelection;
-        return executionData;
+        return fieldSubSelection;
 
     }
 }

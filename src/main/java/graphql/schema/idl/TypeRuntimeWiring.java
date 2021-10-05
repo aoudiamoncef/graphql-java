@@ -1,5 +1,6 @@
 package graphql.schema.idl;
 
+import graphql.PublicApi;
 import graphql.schema.DataFetcher;
 import graphql.schema.GraphQLSchema;
 import graphql.schema.TypeResolver;
@@ -15,6 +16,7 @@ import static graphql.Assert.assertNotNull;
  *
  * This is used by {@link RuntimeWiring} to wire together a functional {@link GraphQLSchema}
  */
+@PublicApi
 public class TypeRuntimeWiring {
     private final String typeName;
     private final DataFetcher defaultDataFetcher;
@@ -38,7 +40,7 @@ public class TypeRuntimeWiring {
      * @return the builder
      */
     public static Builder newTypeWiring(String typeName) {
-        assertNotNull(typeName, "You must provide a type name");
+        assertNotNull(typeName, () -> "You must provide a type name");
         return new Builder().typeName(typeName);
     }
 
@@ -102,8 +104,8 @@ public class TypeRuntimeWiring {
          * @return the current type wiring
          */
         public Builder dataFetcher(String fieldName, DataFetcher dataFetcher) {
-            assertNotNull(dataFetcher, "you must provide a data fetcher");
-            assertNotNull(fieldName, "you must tell us what field");
+            assertNotNull(dataFetcher, () -> "you must provide a data fetcher");
+            assertNotNull(fieldName, () -> "you must tell us what field");
             fieldDataFetchers.put(fieldName, dataFetcher);
             return this;
         }
@@ -116,7 +118,7 @@ public class TypeRuntimeWiring {
          * @return the current type wiring
          */
         public Builder dataFetchers(Map<String, DataFetcher> dataFetchersMap) {
-            assertNotNull(dataFetchersMap, "you must provide a data fetchers map");
+            assertNotNull(dataFetchersMap, () -> "you must provide a data fetchers map");
             fieldDataFetchers.putAll(dataFetchersMap);
             return this;
         }
@@ -144,13 +146,13 @@ public class TypeRuntimeWiring {
          * @return the current type wiring
          */
         public Builder typeResolver(TypeResolver typeResolver) {
-            assertNotNull(typeResolver, "you must provide a type resolver");
+            assertNotNull(typeResolver, () -> "you must provide a type resolver");
             this.typeResolver = typeResolver;
             return this;
         }
 
         public Builder enumValues(EnumValuesProvider enumValuesProvider) {
-            assertNotNull(enumValuesProvider, "you must provide a type resolver");
+            assertNotNull(enumValuesProvider, () -> "you must provide a type resolver");
             this.enumValuesProvider = enumValuesProvider;
             return this;
         }
@@ -159,7 +161,7 @@ public class TypeRuntimeWiring {
          * @return the built type wiring
          */
         public TypeRuntimeWiring build() {
-            assertNotNull(typeName, "you must provide a type name");
+            assertNotNull(typeName, () -> "you must provide a type name");
             return new TypeRuntimeWiring(typeName, defaultDataFetcher, fieldDataFetchers, typeResolver, enumValuesProvider);
         }
     }

@@ -1,28 +1,33 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
 public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayValue> {
 
-    private final List<Value> values = new ArrayList<>();
-
     public static final String CHILD_VALUES = "values";
+    private final ImmutableList<Value> values;
 
     @Internal
-    protected ArrayValue(List<Value> values, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
-        this.values.addAll(values);
+    protected ArrayValue(List<Value> values, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
+        this.values = ImmutableList.copyOf(values);
     }
 
     /**
@@ -31,7 +36,11 @@ public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayV
      * @param values of the array
      */
     public ArrayValue(List<Value> values) {
-        this(values, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(values, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
+    }
+
+    public static Builder newArrayValue() {
+        return new Builder();
     }
 
     public List<Value> getValues() {
@@ -40,7 +49,7 @@ public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayV
 
     @Override
     public List<Node> getChildren() {
-        return new ArrayList<>(values);
+        return ImmutableList.copyOf(values);
     }
 
     @Override
@@ -78,16 +87,12 @@ public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayV
 
     @Override
     public ArrayValue deepCopy() {
-        return new ArrayValue(deepCopy(values), getSourceLocation(), getComments(), getIgnoredChars());
+        return new ArrayValue(deepCopy(values), getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
     public TraversalControl accept(TraverserContext<Node> context, NodeVisitor visitor) {
         return visitor.visitArrayValue(this, context);
-    }
-
-    public static Builder newArrayValue() {
-        return new Builder();
     }
 
     public ArrayValue transform(Consumer<Builder> builderConsumer) {
@@ -98,18 +103,20 @@ public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayV
 
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
-        private List<Value> values = new ArrayList<>();
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Value> values = emptyList();
+        private ImmutableList<Comment> comments = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(ArrayValue existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
-            this.values = existing.getValues();
+            this.comments = ImmutableList.copyOf(existing.getComments());
+            this.values = ImmutableList.copyOf(existing.getValues());
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
         public Builder sourceLocation(SourceLocation sourceLocation) {
@@ -118,17 +125,17 @@ public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayV
         }
 
         public Builder values(List<Value> values) {
-            this.values = values;
+            this.values = ImmutableList.copyOf(values);
             return this;
         }
 
         public Builder value(Value value) {
-            this.values.add(value);
+            this.values = ImmutableKit.addToList(this.values, value);
             return this;
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -137,9 +144,19 @@ public class ArrayValue extends AbstractNode<ArrayValue> implements Value<ArrayV
             return this;
         }
 
+
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public ArrayValue build() {
-            ArrayValue arrayValue = new ArrayValue(values, sourceLocation, comments, ignoredChars);
-            return arrayValue;
+            return new ArrayValue(values, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

@@ -1,6 +1,7 @@
 package graphql.execution;
 
 import graphql.PublicApi;
+import graphql.collect.ImmutableMapWithNullValues;
 import graphql.schema.GraphQLFieldDefinition;
 import graphql.schema.GraphQLInterfaceType;
 import graphql.schema.GraphQLNonNull;
@@ -8,8 +9,6 @@ import graphql.schema.GraphQLObjectType;
 import graphql.schema.GraphQLOutputType;
 import graphql.schema.GraphQLTypeUtil;
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -27,30 +26,69 @@ import static graphql.schema.GraphQLTypeUtil.isList;
 @PublicApi
 public class ExecutionStepInfo {
 
+    /**
+     * An ExecutionStepInfo represent either a field or a list element inside a list of objects/interfaces/unions.
+     *
+     * A StepInfo never represent a Scalar/Enum inside a list (e.g. [String]) because GraphQL execution doesn't descend down
+     * scalar/enums lists.
+     *
+     */
+
+    /**
+     * If this StepInfo represent a field the type is equal to fieldDefinition.getType()
+     * <p>
+     * if this StepInfo is a list element this type is the actual current list element. For example:
+     * Query.pets: [[Pet]] with Pet either a Dog or Cat and the actual result is [[Dog1],[[Cat1]]
+     * Then the type is (for a query "{pets{name}}"):
+     * [[Pet]] for /pets (representing the field Query.pets, not a list element)
+     * [Pet] fot /pets[0]
+     * [Pet] for /pets[1]
+     * Dog for /pets[0][0]
+     * Cat for /pets[1][0]
+     * String for /pets[0][0]/name (representing the field Dog.name, not a list element)
+     * String for /pets[1][0]/name (representing the field Cat.name, not a list element)
+     */
     private final GraphQLOutputType type;
-    private final ExecutionPath path;
+
+    /**
+     * A list element is characterized by having a path ending with an index segment. (ResultPath.isListSegment())
+     */
+    private final ResultPath path;
     private final ExecutionStepInfo parent;
 
-    // field, fieldDefinition, fieldContainer and arguments stay the same for steps inside a list field
+    /**
+     * field, fieldDefinition, fieldContainer and arguments differ per field StepInfo.
+     * <p>
+     * But for list StepInfos these properties are the same as the field returning the list.
+     */
     private final MergedField field;
     private final GraphQLFieldDefinition fieldDefinition;
     private final GraphQLObjectType fieldContainer;
-    private final Map<String, Object> arguments;
+    private final ImmutableMapWithNullValues<String, Object> arguments;
 
     private ExecutionStepInfo(GraphQLOutputType type,
                               GraphQLFieldDefinition fieldDefinition,
                               MergedField field,
-                              ExecutionPath path,
+                              ResultPath path,
                               ExecutionStepInfo parent,
-                              Map<String, Object> arguments,
+                              ImmutableMapWithNullValues<String, Object> arguments,
                               GraphQLObjectType fieldsContainer) {
         this.fieldDefinition = fieldDefinition;
         this.field = field;
         this.path = path;
         this.parent = parent;
-        this.type = assertNotNull(type, "you must provide a graphql type");
+        this.type = assertNotNull(type, () -> "you must provide a graphql type");
         this.arguments = arguments;
         this.fieldContainer = fieldsContainer;
+    }
+
+    /**
+     * @return the GraphQLObjectType defining the {@link #getFieldDefinition()}
+     * @deprecated use {@link #getObjectType()} instead as it is named better
+     * @see ExecutionStepInfo#getObjectType()
+     */
+    public GraphQLObjectType getFieldContainer() {
+        return fieldContainer;
     }
 
     /**
@@ -58,9 +96,9 @@ public class ExecutionStepInfo {
      * Note:
      * For the Introspection field __typename the returned object type doesn't actually contain the fieldDefinition.
      *
-     * @return GraphQLObjectType defining {@link #getFieldDefinition()}
+     * @return the GraphQLObjectType defining the {@link #getFieldDefinition()}
      */
-    public GraphQLObjectType getFieldContainer() {
+    public GraphQLObjectType getObjectType() {
         return fieldContainer;
     }
 
@@ -102,9 +140,9 @@ public class ExecutionStepInfo {
     }
 
     /**
-     * @return the {@link ExecutionPath} to this info
+     * @return the {@link ResultPath} to this info
      */
-    public ExecutionPath getPath() {
+    public ResultPath getPath() {
         return path;
     }
 
@@ -126,7 +164,7 @@ public class ExecutionStepInfo {
      * @return the resolved arguments that have been passed to this field
      */
     public Map<String, Object> getArguments() {
-        return new LinkedHashMap<>(arguments);
+        return arguments;
     }
 
     /**
@@ -134,7 +172,6 @@ public class ExecutionStepInfo {
      *
      * @param name the name of the argument
      * @param <T>  you decide what type it is
-     *
      * @return the named argument or null if its not present
      */
     @SuppressWarnings("unchecked")
@@ -163,11 +200,10 @@ public class ExecutionStepInfo {
      * after type resolution has occurred
      *
      * @param newType the new type to be
-     *
      * @return a new type info with the same
      */
     public ExecutionStepInfo changeTypeWithPreservedNonNull(GraphQLOutputType newType) {
-        assertTrue(!GraphQLTypeUtil.isNonNull(newType), "newType can't be non null");
+        assertTrue(!GraphQLTypeUtil.isNonNull(newType), () -> "newType can't be non null");
         if (isNonNullType()) {
             return new ExecutionStepInfo(GraphQLNonNull.nonNull(newType), fieldDefinition, field, path, this.parent, arguments, this.fieldContainer);
         } else {
@@ -188,7 +224,6 @@ public class ExecutionStepInfo {
         return "ExecutionStepInfo{" +
                 " path=" + path +
                 ", type=" + type +
-                ", parent=" + parent +
                 ", fieldDefinition=" + fieldDefinition +
                 '}';
     }
@@ -220,22 +255,24 @@ public class ExecutionStepInfo {
         GraphQLFieldDefinition fieldDefinition;
         GraphQLObjectType fieldContainer;
         MergedField field;
-        ExecutionPath path;
-        Map<String, Object> arguments = new LinkedHashMap<>();
+        ResultPath path;
+        ImmutableMapWithNullValues<String, Object> arguments;
 
         /**
          * @see ExecutionStepInfo#newExecutionStepInfo()
          */
         private Builder() {
+            arguments = ImmutableMapWithNullValues.emptyMap();
         }
 
         private Builder(ExecutionStepInfo existing) {
             this.type = existing.type;
             this.parentInfo = existing.parent;
             this.fieldDefinition = existing.fieldDefinition;
+            this.fieldContainer = existing.fieldContainer;
             this.field = existing.field;
             this.path = existing.path;
-            this.arguments = existing.getArguments();
+            this.arguments = ImmutableMapWithNullValues.copyOf(existing.getArguments());
         }
 
         public Builder type(GraphQLOutputType type) {
@@ -258,13 +295,13 @@ public class ExecutionStepInfo {
             return this;
         }
 
-        public Builder path(ExecutionPath executionPath) {
-            this.path = executionPath;
+        public Builder path(ResultPath resultPath) {
+            this.path = resultPath;
             return this;
         }
 
         public Builder arguments(Map<String, Object> arguments) {
-            this.arguments = new LinkedHashMap<>(arguments == null ? Collections.emptyMap() : arguments);
+            this.arguments = arguments == null ? ImmutableMapWithNullValues.emptyMap() : ImmutableMapWithNullValues.copyOf(arguments);
             return this;
         }
 

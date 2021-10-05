@@ -30,7 +30,7 @@ public class TypeInfo {
     private final Stack<Class<?>> decoration = new Stack<>();
 
     private TypeInfo(Type type) {
-        this.rawType = assertNotNull(type, "type must not be null");
+        this.rawType = assertNotNull(type, () -> "type must not be null");
         while (!(type instanceof TypeName)) {
             if (type instanceof NonNullType) {
                 decoration.push(NonNullType.class);
@@ -66,6 +66,31 @@ public class TypeInfo {
 
     public boolean isPlain() {
         return !isList() && !isNonNull();
+    }
+
+    /**
+     * This will rename the type with the specified new name but will preserve the wrapping that was present
+     *
+     * @param newName the new name of the type
+     *
+     * @return a new type info rebuilt with the new name
+     */
+    public TypeInfo renameAs(String newName) {
+
+        Type out = TypeName.newTypeName(newName).build();
+
+        Stack<Class<?>> wrappingStack = new Stack<>();
+        wrappingStack.addAll(this.decoration);
+        while (!wrappingStack.isEmpty()) {
+            Class<?> clazz = wrappingStack.pop();
+            if (clazz.equals(NonNullType.class)) {
+                out = NonNullType.newNonNullType(out).build();
+            }
+            if (clazz.equals(ListType.class)) {
+                out = ListType.newListType(out).build();
+            }
+        }
+        return typeInfo(out);
     }
 
     /**
@@ -127,9 +152,12 @@ public class TypeInfo {
 
     @Override
     public int hashCode() {
-        return Objects.hash(typeName.getName(), isNonNull(), isList());
+        int result = 1;
+        result = 31 * result + Objects.hashCode(typeName.getName());
+        result = 31 * result + Boolean.hashCode(isNonNull());
+        result = 31 * result + Boolean.hashCode(isList());
+        return result;
     }
-
 
     @Override
     public String toString() {

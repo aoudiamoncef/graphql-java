@@ -6,6 +6,7 @@ import graphql.schema.GraphQLCompositeType;
 import graphql.schema.GraphQLFieldDefinition;
 
 import java.util.Map;
+import java.util.Objects;
 
 @PublicApi
 public class FieldComplexityEnvironment {
@@ -46,12 +47,11 @@ public class FieldComplexityEnvironment {
     @Override
     public String toString() {
         return "FieldComplexityEnvironment{" +
-                "field=" + field +
-                ", fieldDefinition=" + fieldDefinition +
-                ", parentType=" + parentType +
-                ", parentEnvironment=" + parentEnvironment +
-                ", arguments=" + arguments +
-                '}';
+            "field=" + field +
+            ", fieldDefinition=" + fieldDefinition +
+            ", parentType=" + parentType +
+            ", arguments=" + arguments +
+            '}';
     }
 
     @Override
@@ -60,23 +60,21 @@ public class FieldComplexityEnvironment {
         if (o == null || getClass() != o.getClass()) return false;
 
         FieldComplexityEnvironment that = (FieldComplexityEnvironment) o;
-
-        if (field != null ? !field.equals(that.field) : that.field != null) return false;
-        if (fieldDefinition != null ? !fieldDefinition.equals(that.fieldDefinition) : that.fieldDefinition != null)
-            return false;
-        if (parentType != null ? !parentType.equals(that.parentType) : that.parentType != null) return false;
-        if (parentEnvironment != null ? !parentEnvironment.equals(that.parentEnvironment) : that.parentEnvironment != null)
-            return false;
-        return arguments != null ? arguments.equals(that.arguments) : that.arguments == null;
+        return Objects.equals(field, that.field)
+            && Objects.equals(fieldDefinition, that.fieldDefinition)
+            && Objects.equals(parentType, that.parentType)
+            && Objects.equals(parentEnvironment, that.parentEnvironment)
+            && Objects.equals(arguments, that.arguments);
     }
 
     @Override
     public int hashCode() {
-        int result = field != null ? field.hashCode() : 0;
-        result = 31 * result + (fieldDefinition != null ? fieldDefinition.hashCode() : 0);
-        result = 31 * result + (parentType != null ? parentType.hashCode() : 0);
-        result = 31 * result + (parentEnvironment != null ? parentEnvironment.hashCode() : 0);
-        result = 31 * result + (arguments != null ? arguments.hashCode() : 0);
+        int result = 1;
+        result = 31 * result + Objects.hashCode(field);
+        result = 31 * result + Objects.hashCode(fieldDefinition);
+        result = 31 * result + Objects.hashCode(parentType);
+        result = 31 * result + Objects.hashCode(parentEnvironment);
+        result = 31 * result + Objects.hashCode(arguments);
         return result;
     }
 }

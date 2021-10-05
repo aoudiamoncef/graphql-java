@@ -1,10 +1,10 @@
 package graphql
 
-import graphql.execution.ExecutionPath
 import graphql.execution.ExecutionStepInfo
 import graphql.execution.MissingRootTypeException
 import graphql.execution.NonNullableFieldWasNullError
 import graphql.execution.NonNullableFieldWasNullException
+import graphql.execution.ResultPath
 import graphql.introspection.Introspection
 import graphql.language.SourceLocation
 import graphql.schema.CoercingSerializeException
@@ -29,35 +29,41 @@ class GraphQLErrorTest extends Specification {
                 [
                         locations: [[line: 666, column: 999], [line: 333, column: 0]],
                         message  : "Validation error of type UnknownType: Test ValidationError",
+                        extensions:[classification:"ValidationError"],
                 ]
 
         new MissingRootTypeException("Mutations are not supported on this schema", null)               |
                 [
                         message: "Mutations are not supported on this schema",
+                        extensions:[classification:"OperationNotSupported"],
                 ]
 
         new InvalidSyntaxError(mkLocations(), "Not good syntax m'kay")                                 |
                 [
                         locations: [[line: 666, column: 999], [line: 333, column: 0]],
                         message  : "Not good syntax m'kay",
+                        extensions:[classification:"InvalidSyntax"],
                 ]
 
         new NonNullableFieldWasNullError(new NonNullableFieldWasNullException(mkTypeInfo(), mkPath())) |
                 [
-                        message: 'Cannot return null for non-nullable type: \'__Schema\' (/heroes[0]/abilities/speed[4])',
+                        message: '''The field at path '/heroes[0]/abilities/speed[4]' was declared as a non null type, but the code involved in retrieving data has wrongly returned a null value.  The graphql specification requires that the parent field be set to null, or if that is non nullable that it bubble up null to its parent and so on. The non-nullable type is '__Schema\'''',
                         path   : ["heroes", 0, "abilities", "speed", 4],
+                        extensions:[classification:"NullValueInNonNullableField"],
                 ]
 
         new SerializationError(mkPath(), new CoercingSerializeException("Bad coercing"))               |
                 [
                         message: "Can't serialize value (/heroes[0]/abilities/speed[4]) : Bad coercing",
                         path   : ["heroes", 0, "abilities", "speed", 4],
+                        extensions:[classification:"DataFetchingException"],
                 ]
 
         new ExceptionWhileDataFetching(mkPath(), new RuntimeException("Bang"), mkLocation(666, 999))   |
                 [locations: [[line: 666, column: 999]],
                  message  : "Exception while fetching data (/heroes[0]/abilities/speed[4]) : Bang",
                  path     : ["heroes", 0, "abilities", "speed", 4],
+                 extensions:[classification:"DataFetchingException"],
                 ]
 
     }
@@ -107,8 +113,8 @@ class GraphQLErrorTest extends Specification {
         return new SourceLocation(line, column)
     }
 
-    ExecutionPath mkPath() {
-        return ExecutionPath.rootPath()
+    ResultPath mkPath() {
+        return ResultPath.rootPath()
                 .segment("heroes")
                 .segment(0)
                 .segment("abilities")

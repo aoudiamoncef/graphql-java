@@ -1,33 +1,31 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 import static graphql.language.NodeUtil.assertNewChildrenAreEmpty;
 
-// This should probably be an enum... but the grammar
-// doesn't enforce the names. These are the current names:
-//    QUERY
-//    MUTATION
-//    FIELD
-//    FRAGMENT_DEFINITION
-//    FRAGMENT_SPREAD
-//    INLINE_FRAGMENT
 @PublicApi
 public class DirectiveLocation extends AbstractNode<DirectiveLocation> implements NamedNode<DirectiveLocation> {
     private final String name;
 
     @Internal
-    protected DirectiveLocation(String name, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected DirectiveLocation(String name, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.name = name;
     }
 
@@ -37,7 +35,7 @@ public class DirectiveLocation extends AbstractNode<DirectiveLocation> implement
      * @param name of the directive location
      */
     public DirectiveLocation(String name) {
-        this(name, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     @Override
@@ -47,7 +45,7 @@ public class DirectiveLocation extends AbstractNode<DirectiveLocation> implement
 
     @Override
     public List<Node> getChildren() {
-        return new ArrayList<>();
+        return emptyList();
     }
 
     @Override
@@ -72,12 +70,12 @@ public class DirectiveLocation extends AbstractNode<DirectiveLocation> implement
 
         DirectiveLocation that = (DirectiveLocation) o;
 
-        return NodeUtil.isEqualTo(this.name, that.name);
+        return Objects.equals(this.name, that.name);
     }
 
     @Override
     public DirectiveLocation deepCopy() {
-        return new DirectiveLocation(name, getSourceLocation(), getComments(), getIgnoredChars());
+        return new DirectiveLocation(name, getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -104,17 +102,19 @@ public class DirectiveLocation extends AbstractNode<DirectiveLocation> implement
 
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private String name;
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(DirectiveLocation existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
         public Builder sourceLocation(SourceLocation sourceLocation) {
@@ -123,7 +123,7 @@ public class DirectiveLocation extends AbstractNode<DirectiveLocation> implement
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -137,9 +137,18 @@ public class DirectiveLocation extends AbstractNode<DirectiveLocation> implement
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public DirectiveLocation build() {
-            DirectiveLocation directiveLocation = new DirectiveLocation(name, sourceLocation, comments, ignoredChars);
-            return directiveLocation;
+            return new DirectiveLocation(name, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

@@ -1,30 +1,37 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
-public class FragmentSpread extends AbstractNode<FragmentSpread> implements Selection<FragmentSpread>, DirectivesContainer<FragmentSpread> {
+public class FragmentSpread extends AbstractNode<FragmentSpread> implements Selection<FragmentSpread>, DirectivesContainer<FragmentSpread>, NamedNode<FragmentSpread> {
 
     private final String name;
-    private final List<Directive> directives;
+    private final ImmutableList<Directive> directives;
 
     public static final String CHILD_DIRECTIVES = "directives";
 
     @Internal
-    protected FragmentSpread(String name, List<Directive> directives, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected FragmentSpread(String name, List<Directive> directives, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.name = name;
-        this.directives = new ArrayList<>(directives);
+        this.directives = ImmutableList.copyOf(directives);
     }
 
     /**
@@ -33,7 +40,7 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
      * @param name of the fragment
      */
     public FragmentSpread(String name) {
-        this(name, new ArrayList<>(), null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, emptyList(), null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     @Override
@@ -43,7 +50,7 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
 
     @Override
     public List<Directive> getDirectives() {
-        return new ArrayList<>(directives);
+        return directives;
     }
 
     @Override
@@ -57,15 +64,13 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
 
         FragmentSpread that = (FragmentSpread) o;
 
-        return NodeUtil.isEqualTo(this.name, that.name);
+        return Objects.equals(this.name, that.name);
     }
 
 
     @Override
     public List<Node> getChildren() {
-        List<Node> result = new ArrayList<>();
-        result.addAll(directives);
-        return result;
+        return ImmutableList.copyOf(directives);
     }
 
     @Override
@@ -84,7 +89,7 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
 
     @Override
     public FragmentSpread deepCopy() {
-        return new FragmentSpread(name, deepCopy(directives), getSourceLocation(), getComments(), getIgnoredChars());
+        return new FragmentSpread(name, deepCopy(directives), getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -115,22 +120,24 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
         return builder.build();
     }
 
-    public static final class Builder implements NodeBuilder {
+    public static final class Builder implements NodeDirectivesBuilder {
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private String name;
-        private List<Directive> directives = new ArrayList<>();
+        private ImmutableList<Directive> directives = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(FragmentSpread existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
-            this.directives = existing.getDirectives();
+            this.directives = ImmutableList.copyOf(existing.getDirectives());
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
         public Builder sourceLocation(SourceLocation sourceLocation) {
@@ -139,7 +146,7 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -148,19 +155,35 @@ public class FragmentSpread extends AbstractNode<FragmentSpread> implements Sele
             return this;
         }
 
+        @Override
         public Builder directives(List<Directive> directives) {
-            this.directives = directives;
+            this.directives = ImmutableList.copyOf(directives);
             return this;
         }
+
+        public Builder directive(Directive directive) {
+            this.directives = ImmutableKit.addToList(directives, directive);
+            return this;
+        }
+
 
         public Builder ignoredChars(IgnoredChars ignoredChars) {
             this.ignoredChars = ignoredChars;
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public FragmentSpread build() {
-            FragmentSpread fragmentSpread = new FragmentSpread(name, directives, sourceLocation, comments, ignoredChars);
-            return fragmentSpread;
+            return new FragmentSpread(name, directives, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

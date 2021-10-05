@@ -1,8 +1,10 @@
 package graphql.schema.diff;
 
+import graphql.PublicSpi;
 import graphql.introspection.IntrospectionResultToSchema;
 import graphql.language.Argument;
 import graphql.language.Directive;
+import graphql.language.DirectivesContainer;
 import graphql.language.Document;
 import graphql.language.EnumTypeDefinition;
 import graphql.language.EnumValueDefinition;
@@ -23,7 +25,6 @@ import graphql.language.Value;
 import graphql.schema.diff.reporting.DifferenceReporter;
 import graphql.schema.idl.TypeInfo;
 
-import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,7 @@ import static graphql.schema.idl.TypeInfo.typeInfo;
  * {@link graphql.schema.diff.reporting.DifferenceReporter}
  */
 @SuppressWarnings("ConstantConditions")
+@PublicSpi
 public class SchemaDiff {
 
     /**
@@ -269,6 +271,10 @@ public class SchemaDiff {
         ctx.exitType();
     }
 
+    private boolean isDeprecated(DirectivesContainer<?> node) {
+        return node.hasDirective("deprecated");
+    }
+
     private boolean isReservedType(String typeName) {
         return typeName.startsWith("__");
     }
@@ -318,6 +324,7 @@ public class SchemaDiff {
         Map<String, Type> oldMemberTypes = sortedMap(oldDef.getMemberTypes(), SchemaDiff::getTypeName);
         Map<String, Type> newMemberTypes = sortedMap(newDef.getMemberTypes(), SchemaDiff::getTypeName);
 
+
         for (Map.Entry<String, Type> entry : oldMemberTypes.entrySet()) {
             String oldMemberTypeName = entry.getKey();
             if (!newMemberTypes.containsKey(oldMemberTypeName)) {
@@ -328,6 +335,9 @@ public class SchemaDiff {
                         .components(oldMemberTypeName)
                         .reasonMsg("The new API does not contain union member type '%s'", oldMemberTypeName)
                         .build());
+            } else {
+                // check type which is in the old and the new Union def
+                checkType(ctx, entry.getValue(), newMemberTypes.get(oldMemberTypeName));
             }
         }
         for (Map.Entry<String, Type> entry : newMemberTypes.entrySet()) {
@@ -370,12 +380,21 @@ public class SchemaDiff {
 
 
             if (!newField.isPresent()) {
+                DiffCategory category;
+                String message;
+                if (isDeprecated(oldField)) {
+                    category = DiffCategory.DEPRECATION_REMOVED;
+                    message = "The new API has removed a deprecated field '%s'";
+                } else {
+                    category = DiffCategory.MISSING;
+                    message = "The new API is missing an input field '%s'";
+                }
                 ctx.report(DiffEvent.apiBreakage()
-                        .category(DiffCategory.MISSING)
+                        .category(category)
                         .typeName(old.getName())
                         .typeKind(getTypeKind(old))
                         .fieldName(oldField.getName())
-                        .reasonMsg("The new API is missing an input field '%s'", mkDotName(old.getName(), oldField.getName()))
+                        .reasonMsg(message, mkDotName(old.getName(), oldField.getName()))
                         .build());
             } else {
                 DiffCategory category = checkTypeWithNonNullAndList(oldField.getType(), newField.get().getType());
@@ -390,6 +409,11 @@ public class SchemaDiff {
                                     oldField.getName(), getAstDesc(oldField.getType()), getAstDesc(newField.get().getType()))
                             .build());
                 }
+
+                //
+                // recurse via input types
+                //
+                checkType(ctx, oldField.getType(), newField.get().getType());
             }
         }
 
@@ -422,12 +446,21 @@ public class SchemaDiff {
             Optional<EnumValueDefinition> newEnum = Optional.ofNullable(newDefinitionMap.get(enumName));
 
             if (!newEnum.isPresent()) {
+                DiffCategory category;
+                String message;
+                if (isDeprecated(oldEnum)) {
+                    category = DiffCategory.DEPRECATION_REMOVED;
+                    message = "The new API has removed a deprecated enum value '%s'";
+                } else {
+                    category = DiffCategory.MISSING;
+                    message = "The new API is missing an enum value '%s'";
+                }
                 ctx.report(DiffEvent.apiBreakage()
-                        .category(DiffCategory.MISSING)
+                        .category(category)
                         .typeName(oldDef.getName())
                         .typeKind(getTypeKind(oldDef))
                         .components(oldEnum.getName())
-                        .reasonMsg("The new API is missing an enum value '%s'", oldEnum.getName())
+                        .reasonMsg(message, oldEnum.getName())
                         .build());
             } else {
                 checkDirectives(ctx, oldDef, oldEnum.getDirectives(), newEnum.get().getDirectives());
@@ -444,6 +477,14 @@ public class SchemaDiff {
                         .components(enumName)
                         .reasonMsg("The new API has added a new enum value '%s'", enumName)
                         .build());
+            } else if (isDeprecated(newDefinitionMap.get(enumName))) {
+                ctx.report(DiffEvent.apiDanger()
+                        .category(DiffCategory.DEPRECATION_ADDED)
+                        .typeName(oldDef.getName())
+                        .typeKind(getTypeKind(oldDef))
+                        .components(enumName)
+                        .reasonMsg("The new API has deprecated an enum value '%s'", enumName)
+                        .build());
             }
         }
         checkDirectives(ctx, oldDef, newDef);
@@ -458,18 +499,21 @@ public class SchemaDiff {
         Map<String, Type> newImplementsMap = sortedMap(newImplements, t -> ((TypeName) t).getName());
 
         for (Map.Entry<String, Type> entry : oldImplementsMap.entrySet()) {
-            InterfaceTypeDefinition oldInterface = ctx.getOldTypeDef(entry.getValue(), InterfaceTypeDefinition.class).get();
+            Optional<InterfaceTypeDefinition> oldInterface = ctx.getOldTypeDef(entry.getValue(), InterfaceTypeDefinition.class);
+            if (!oldInterface.isPresent()) {
+                continue;
+            }
             Optional<InterfaceTypeDefinition> newInterface = ctx.getNewTypeDef(newImplementsMap.get(entry.getKey()), InterfaceTypeDefinition.class);
             if (!newInterface.isPresent()) {
                 ctx.report(DiffEvent.apiBreakage()
                         .category(DiffCategory.MISSING)
                         .typeName(old.getName())
                         .typeKind(getTypeKind(old))
-                        .components(oldInterface.getName())
-                        .reasonMsg("The new API is missing the interface named '%s'", oldInterface.getName())
+                        .components(oldInterface.get().getName())
+                        .reasonMsg("The new API is missing the interface named '%s'", oldInterface.get().getName())
                         .build());
             } else {
-                checkInterfaceType(ctx, oldInterface, newInterface.get());
+                checkInterfaceType(ctx, oldInterface.get(), newInterface.get());
             }
         }
     }
@@ -504,12 +548,21 @@ public class SchemaDiff {
 
             FieldDefinition newField = newFields.get(fieldName);
             if (newField == null) {
+                DiffCategory category;
+                String message;
+                if (isDeprecated(entry.getValue())) {
+                    category = DiffCategory.DEPRECATION_REMOVED;
+                    message = "The new API has removed a deprecated field '%s'";
+                } else {
+                    category = DiffCategory.MISSING;
+                    message = "The new API is missing the field '%s'";
+                }
                 ctx.report(DiffEvent.apiBreakage()
-                        .category(DiffCategory.MISSING)
+                        .category(category)
                         .typeName(oldDef.getName())
                         .typeKind(getTypeKind(oldDef))
                         .fieldName(fieldName)
-                        .reasonMsg("The new API is missing the field '%s'", mkDotName(oldDef.getName(), fieldName))
+                        .reasonMsg(message, mkDotName(oldDef.getName(), fieldName))
                         .build());
             } else {
                 checkField(ctx, oldDef, entry.getValue(), newField);
@@ -541,6 +594,14 @@ public class SchemaDiff {
                         .typeKind(getTypeKind(newDef))
                         .fieldName(fieldName)
                         .reasonMsg("The new API adds the field '%s'", mkDotName(newDef.getName(), fieldName))
+                        .build());
+            } else if (!isDeprecated(oldField) && isDeprecated(entry.getValue())) {
+                ctx.report(DiffEvent.apiDanger()
+                        .category(DiffCategory.DEPRECATION_ADDED)
+                        .typeName(newDef.getName())
+                        .typeKind(getTypeKind(newDef))
+                        .fieldName(fieldName)
+                        .reasonMsg("The new API deprecated a field '%s'", mkDotName(newDef.getName(), fieldName))
                         .build());
             }
         }
@@ -854,6 +915,6 @@ public class SchemaDiff {
     }
 
     private String mkDotName(String... objectNames) {
-        return Arrays.stream(objectNames).collect(Collectors.joining("."));
+        return String.join(".", objectNames);
     }
 }

@@ -1,15 +1,20 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
@@ -20,8 +25,8 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
     public static final String CHILD_TYPE = "type";
 
     @Internal
-    protected ListType(Type type, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected ListType(Type type, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.type = type;
     }
 
@@ -31,7 +36,7 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
      * @param type the wrapped type
      */
     public ListType(Type type) {
-        this(type, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(type, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     public Type getType() {
@@ -40,9 +45,7 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
 
     @Override
     public List<Node> getChildren() {
-        List<Node> result = new ArrayList<>();
-        result.add(type);
-        return result;
+        return ImmutableList.of(type);
     }
 
     @Override
@@ -73,7 +76,7 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
 
     @Override
     public ListType deepCopy() {
-        return new ListType(deepCopy(type), getSourceLocation(), getComments(), getIgnoredChars());
+        return new ListType(deepCopy(type), getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -105,17 +108,19 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
     public static final class Builder implements NodeBuilder {
         private Type type;
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(ListType existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.type = existing.getType();
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -130,7 +135,7 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -139,9 +144,18 @@ public class ListType extends AbstractNode<ListType> implements Type<ListType> {
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public ListType build() {
-            ListType listType = new ListType(type, sourceLocation, comments, ignoredChars);
-            return listType;
+            return new ListType(type, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

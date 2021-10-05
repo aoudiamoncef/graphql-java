@@ -7,12 +7,18 @@ import graphql.language.SelectionSetContainer;
 import graphql.schema.GraphQLFieldDefinition;
 import graphql.schema.GraphQLFieldsContainer;
 import graphql.schema.GraphQLOutputType;
+import graphql.schema.GraphQLSchema;
 import graphql.util.TraverserContext;
 
 import java.util.Map;
 
 @PublicApi
 public interface QueryVisitorFieldEnvironment {
+
+    /**
+     * @return the graphql schema in play
+     */
+    GraphQLSchema getSchema();
 
     /**
      * @return true if the current field is __typename
@@ -32,7 +38,9 @@ public interface QueryVisitorFieldEnvironment {
     GraphQLOutputType getParentType();
 
     /**
-     * @return the unmodified fields container fot the current type
+     * @return the unmodified fields container fot the current type. This is the unwrapped version of {@link #getParentType()}
+     * It is either {@link graphql.schema.GraphQLObjectType} or {@link graphql.schema.GraphQLInterfaceType}. because these
+     * are the only {@link GraphQLFieldsContainer}
      *
      * @throws IllegalStateException if the current field is __typename see {@link #isTypeNameIntrospectionField()}
      */

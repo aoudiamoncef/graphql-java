@@ -4,10 +4,8 @@ package graphql.execution;
 import graphql.ExecutionInput;
 import graphql.ExecutionResult;
 import graphql.ExecutionResultImpl;
-import graphql.GraphQL;
 import graphql.GraphQLError;
 import graphql.Internal;
-import graphql.execution.defer.DeferSupport;
 import graphql.execution.instrumentation.Instrumentation;
 import graphql.execution.instrumentation.InstrumentationContext;
 import graphql.execution.instrumentation.InstrumentationState;
@@ -20,9 +18,8 @@ import graphql.language.OperationDefinition;
 import graphql.language.VariableDefinition;
 import graphql.schema.GraphQLObjectType;
 import graphql.schema.GraphQLSchema;
-import org.reactivestreams.Publisher;
+import graphql.util.LogKit;
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.List;
@@ -40,7 +37,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 
 @Internal
 public class Execution {
-    private static final Logger log = LoggerFactory.getLogger(Execution.class);
+    private static final Logger logNotSafe = LogKit.getNotPrivacySafeLogger(Execution.class);
 
     private final FieldCollector fieldCollector = new FieldCollector();
     private final ValuesResolver valuesResolver = new ValuesResolver();
@@ -48,12 +45,14 @@ public class Execution {
     private final ExecutionStrategy mutationStrategy;
     private final ExecutionStrategy subscriptionStrategy;
     private final Instrumentation instrumentation;
+    private ValueUnboxer valueUnboxer;
 
-    public Execution(ExecutionStrategy queryStrategy, ExecutionStrategy mutationStrategy, ExecutionStrategy subscriptionStrategy, Instrumentation instrumentation) {
+    public Execution(ExecutionStrategy queryStrategy, ExecutionStrategy mutationStrategy, ExecutionStrategy subscriptionStrategy, Instrumentation instrumentation, ValueUnboxer valueUnboxer) {
         this.queryStrategy = queryStrategy != null ? queryStrategy : new AsyncExecutionStrategy();
         this.mutationStrategy = mutationStrategy != null ? mutationStrategy : new AsyncSerialExecutionStrategy();
         this.subscriptionStrategy = subscriptionStrategy != null ? subscriptionStrategy : new AsyncExecutionStrategy();
         this.instrumentation = instrumentation;
+        this.valueUnboxer = valueUnboxer;
     }
 
     public CompletableFuture<ExecutionResult> execute(Document document, GraphQLSchema graphQLSchema, ExecutionId executionId, ExecutionInput executionInput, InstrumentationState instrumentationState) {
@@ -67,7 +66,7 @@ public class Execution {
 
         Map<String, Object> coercedVariables;
         try {
-            coercedVariables = valuesResolver.coerceArgumentValues(graphQLSchema, variableDefinitions, inputVariables);
+            coercedVariables = valuesResolver.coerceVariableValues(graphQLSchema, variableDefinitions, inputVariables);
         } catch (RuntimeException rte) {
             if (rte instanceof GraphQLError) {
                 return completedFuture(new ExecutionResultImpl((GraphQLError) rte));
@@ -84,12 +83,18 @@ public class Execution {
                 .mutationStrategy(mutationStrategy)
                 .subscriptionStrategy(subscriptionStrategy)
                 .context(executionInput.getContext())
+                .graphQLContext(executionInput.getGraphQLContext())
+                .localContext(executionInput.getLocalContext())
                 .root(executionInput.getRoot())
                 .fragmentsByName(fragmentsByName)
                 .variables(coercedVariables)
                 .document(document)
                 .operationDefinition(operationDefinition)
                 .dataLoaderRegistry(executionInput.getDataLoaderRegistry())
+                .cacheControl(executionInput.getCacheControl())
+                .locale(executionInput.getLocale())
+                .valueUnboxer(valueUnboxer)
+                .executionInput(executionInput)
                 .build();
 
 
@@ -97,11 +102,11 @@ public class Execution {
                 executionInput, graphQLSchema, instrumentationState
         );
         executionContext = instrumentation.instrumentExecutionContext(executionContext, parameters);
-        return executeOperation(executionContext, parameters, executionInput.getRoot(), executionContext.getOperationDefinition());
+        return executeOperation(executionContext, executionInput.getRoot(), executionContext.getOperationDefinition());
     }
 
 
-    private CompletableFuture<ExecutionResult> executeOperation(ExecutionContext executionContext, InstrumentationExecutionParameters instrumentationExecutionParameters, Object root, OperationDefinition operationDefinition) {
+    private CompletableFuture<ExecutionResult> executeOperation(ExecutionContext executionContext, Object root, OperationDefinition operationDefinition) {
 
         InstrumentationExecuteOperationParameters instrumentationParams = new InstrumentationExecuteOperationParameters(executionContext);
         InstrumentationContext<ExecutionResult> executeOperationCtx = instrumentation.beginExecuteOperation(instrumentationParams);
@@ -132,14 +137,14 @@ public class Execution {
 
         MergedSelectionSet fields = fieldCollector.collectFields(collectorParameters, operationDefinition.getSelectionSet());
 
-        ExecutionPath path = ExecutionPath.rootPath();
+        ResultPath path = ResultPath.rootPath();
         ExecutionStepInfo executionStepInfo = newExecutionStepInfo().type(operationRootType).path(path).build();
         NonNullableFieldValidator nonNullableFieldValidator = new NonNullableFieldValidator(executionContext, executionStepInfo);
 
         ExecutionStrategyParameters parameters = newParameters()
                 .executionStepInfo(executionStepInfo)
                 .source(root)
-                .localContext(executionContext.getContext())
+                .localContext(executionContext.getLocalContext())
                 .fields(fields)
                 .nonNullFieldValidator(nonNullableFieldValidator)
                 .path(path)
@@ -147,15 +152,10 @@ public class Execution {
 
         CompletableFuture<ExecutionResult> result;
         try {
-            ExecutionStrategy executionStrategy;
-            if (operation == OperationDefinition.Operation.MUTATION) {
-                executionStrategy = mutationStrategy;
-            } else if (operation == SUBSCRIPTION) {
-                executionStrategy = subscriptionStrategy;
-            } else {
-                executionStrategy = queryStrategy;
+            ExecutionStrategy executionStrategy = executionContext.getStrategy(operation);
+            if (logNotSafe.isDebugEnabled()) {
+                logNotSafe.debug("Executing '{}' query operation: '{}' using '{}' execution strategy", executionContext.getExecutionId(), operation, executionStrategy.getClass().getName());
             }
-            log.debug("Executing '{}' query operation: '{}' using '{}' execution strategy", executionContext.getExecutionId(), operation, executionStrategy.getClass().getName());
             result = executionStrategy.execute(executionContext, parameters);
         } catch (NonNullableFieldWasNullException e) {
             // this means it was non null types all the way from an offending non null type
@@ -173,27 +173,9 @@ public class Execution {
 
         result = result.whenComplete(executeOperationCtx::onCompleted);
 
-        return deferSupport(executionContext, result);
+        return result;
     }
 
-    /*
-     * Adds the deferred publisher if its needed at the end of the query.  This is also a good time for the deferred code to start running
-     */
-    private CompletableFuture<ExecutionResult> deferSupport(ExecutionContext executionContext, CompletableFuture<ExecutionResult> result) {
-        return result.thenApply(er -> {
-            DeferSupport deferSupport = executionContext.getDeferSupport();
-            if (deferSupport.isDeferDetected()) {
-                // we start the rest of the query now to maximize throughput.  We have the initial important results
-                // and now we can start the rest of the calls as early as possible (even before some one subscribes)
-                Publisher<ExecutionResult> publisher = deferSupport.startDeferredCalls();
-                return ExecutionResultImpl.newExecutionResult().from((ExecutionResultImpl) er)
-                        .addExtension(GraphQL.DEFERRED_RESULTS, publisher)
-                        .build();
-            }
-            return er;
-        });
-
-    }
 
     private GraphQLObjectType getOperationRootType(GraphQLSchema graphQLSchema, OperationDefinition operationDefinition) {
         OperationDefinition.Operation operation = operationDefinition.getOperation();

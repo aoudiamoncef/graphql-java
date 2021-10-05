@@ -4,16 +4,20 @@ import graphql.TestUtil
 import graphql.language.Document
 import graphql.language.Field
 import graphql.language.NodeUtil
-import graphql.language.SelectionSet
+import graphql.language.OperationDefinition
+import graphql.language.TypeName
 import graphql.parser.Parser
+import graphql.schema.GraphQLFieldsContainer
 import graphql.schema.GraphQLSchema
+import graphql.schema.GraphQLUnionType
+import graphql.util.TraversalControl
 import spock.lang.Specification
 
 import static graphql.language.AstPrinter.printAstCompact
 import static graphql.language.Field.newField
 import static graphql.util.TreeTransformerUtil.changeNode
-import static graphql.util.TreeTransformerUtil.changeParentNode
 import static graphql.util.TreeTransformerUtil.deleteNode
+import static graphql.util.TreeTransformerUtil.insertAfter
 
 class QueryTransformerTest extends Specification {
     Document createQuery(String query) {
@@ -110,12 +114,7 @@ class QueryTransformerTest extends Specification {
             @Override
             void visitField(QueryVisitorFieldEnvironment env) {
                 if (env.fieldDefinition.type.name == "MidA") {
-                    changeParentNode(env.getTraverserContext(), { node ->
-                        def newChild = newField("addedField").build()
-                        def newChildren = node.getNamedChildren()
-                                .transform({ it.child(SelectionSet.CHILD_SELECTIONS, newChild) })
-                        node.withNewChildren(newChildren)
-                    })
+                    insertAfter(env.getTraverserContext(), newField("addedField").build())
                 }
             }
         }
@@ -202,12 +201,12 @@ class QueryTransformerTest extends Specification {
         when:
         queryTransformer.transform(visitor)
         then:
-        1 * visitor.visitField({ QueryVisitorFieldEnvironmentImpl it -> it.field.name == "root" && it.fieldDefinition.type.name == "Root" && it.parentType.name == "Query" })
+        1 * visitor.visitFieldWithControl({ QueryVisitorFieldEnvironmentImpl it -> it.field.name == "root" && it.fieldDefinition.type.name == "Root" && it.parentType.name == "Query" }) >> TraversalControl.CONTINUE
         1 * visitor.visitFragmentSpread({ QueryVisitorFragmentSpreadEnvironment it -> it.fragmentSpread.name == "frag" })
         0 * _
     }
 
-    def "named fragment is traversed if it is a root and can be transformed"() {
+    def "fragment definition is traversed if it is a root and can be transformed"() {
         def query = TestUtil.parseQuery('''
             {
                 root {
@@ -230,16 +229,22 @@ class QueryTransformerTest extends Specification {
         def visitor = new QueryVisitorStub() {
             @Override
             void visitField(QueryVisitorFieldEnvironment env) {
-                if (env.fieldDefinition.type.name == "String") {
-                    changeParentNode(env.traverserContext, { node ->
-
-                        node.withNewChildren(node.namedChildren.transform({
-                            it.removeChild(SelectionSet.CHILD_SELECTIONS, 0)
-                            it.child(SelectionSet.CHILD_SELECTIONS, newField("newChild1").build())
-                            it.child(SelectionSet.CHILD_SELECTIONS, newField("newChild2").build())
-                        }))
-                    })
+                if (env.field.name == "leafA") {
+                    deleteNode(env.traverserContext)
                 }
+                if (env.fieldDefinition.type.name == "String") {
+                    insertAfter(env.traverserContext, newField("newChild1").build())
+                    insertAfter(env.traverserContext, newField("newChild2").build())
+                }
+            }
+
+            @Override
+            void visitFragmentDefinition(QueryVisitorFragmentDefinitionEnvironment env) {
+                def changed = env.fragmentDefinition.transform({ builder ->
+                    builder.typeCondition(TypeName.newTypeName("newTypeName").build())
+                            .name("newFragName")
+                })
+                changeNode(env.traverserContext, changed)
             }
         }
 
@@ -248,6 +253,199 @@ class QueryTransformerTest extends Specification {
         def newFragment = queryTransformer.transform(visitor)
         then:
         printAstCompact(newFragment) ==
-                "fragment frag on Root {fooA {midA {newChild1 newChild2}}}"
+                "fragment newFragName on newTypeName {fooA {midA {newChild1 newChild2}}}"
+    }
+
+    def "transform starting in a interface field"() {
+        def schema = TestUtil.schema("""
+            type Query {
+                root: SomeInterface
+            }
+            interface SomeInterface {
+                field1: String
+                field2: String
+            }
+        """)
+        def query = TestUtil.parseQuery('''
+            {
+                root {
+                   field1
+                   field2 
+                }
+            }
+            ''')
+        def rootField = (query.children[0] as OperationDefinition).selectionSet.selections[0] as Field
+        def field1 = rootField.selectionSet.selections[0] as Field
+        QueryTransformer queryTransformer = QueryTransformer.newQueryTransformer()
+                .schema(schema)
+                .root(field1)
+                .rootParentType(schema.getType("SomeInterface") as GraphQLFieldsContainer)
+                .fragmentsByName([:])
+                .variables([:])
+                .build()
+
+        def visitor = new QueryVisitorStub() {
+            @Override
+            void visitField(QueryVisitorFieldEnvironment env) {
+                if (env.field.name == "field1") {
+                    changeNode(env.traverserContext, env.field.transform({ builder -> builder.name("field1X") }))
+                }
+            }
+        }
+
+
+        when:
+        def newNode = queryTransformer.transform(visitor)
+        then:
+        printAstCompact(newNode) == "field1X"
+
+    }
+
+    def "transform starting in a union field"() {
+        def schema = TestUtil.schema("""
+            type Query {
+                root: SomeUnion
+            }
+            union SomeUnion = A | B
+            type A  {
+                a: String
+            }
+            type B  {
+                b: String
+            }
+        """)
+        def query = TestUtil.parseQuery('''
+            {
+                root {
+                  __typename
+                  ... on A {
+                    a
+                  }
+                  ... on B {
+                   b 
+                  }
+                }
+            }
+            ''')
+        def rootField = (query.children[0] as OperationDefinition).selectionSet.selections[0] as Field
+        def typeNameField = rootField.selectionSet.selections[0] as Field
+        QueryTransformer queryTransformer = QueryTransformer.newQueryTransformer()
+                .schema(schema)
+                .root(typeNameField)
+                .rootParentType(schema.getType("SomeUnion") as GraphQLUnionType)
+                .fragmentsByName([:])
+                .variables([:])
+                .build()
+
+        boolean visitedTypeNameField
+        def visitor = new QueryVisitorStub() {
+            @Override
+            void visitField(QueryVisitorFieldEnvironment env) {
+                visitedTypeNameField = env.isTypeNameIntrospectionField()
+            }
+        }
+
+
+        when:
+        queryTransformer.transform(visitor)
+        then:
+        visitedTypeNameField
+
+    }
+
+    def "transform starting in a selectionSet node belonging to an interface"() {
+        def schema = TestUtil.schema("""
+            type Query {
+                root: SomeInterface
+            }
+            interface SomeInterface {
+                field1: String
+                field2: String
+            }
+        """)
+        def query = TestUtil.parseQuery('''
+            {
+                root {
+                   field1
+                   field2 
+                }
+            }
+            ''')
+        def rootField = (query.children[0] as OperationDefinition).selectionSet.selections[0] as Field
+        QueryTransformer queryTransformer = QueryTransformer.newQueryTransformer()
+                .schema(schema)
+                .root(rootField.getSelectionSet())
+                .rootParentType(schema.getType("SomeInterface") as GraphQLFieldsContainer)
+                .fragmentsByName([:])
+                .variables([:])
+                .build()
+
+        def visitor = new QueryVisitorStub() {
+            @Override
+            void visitField(QueryVisitorFieldEnvironment env) {
+                if (env.field.name == "field1") {
+                    changeNode(env.traverserContext, env.field.transform({ builder -> builder.name("field1X") }))
+                }
+            }
+        }
+
+
+        when:
+        def newNode = queryTransformer.transform(visitor)
+        then:
+        printAstCompact(newNode) == "{field1X field2}"
+
+    }
+
+    def "transform starting in a selectionSet node belonging to an union"() {
+        def schema = TestUtil.schema("""
+        type Query {
+            root: SomeUnion
+        }
+        union SomeUnion = A | B
+        type A  {
+            a: String
+        }
+        type B  {
+            b: String
+        }
+        """)
+        def query = TestUtil.parseQuery('''
+            {
+                root {
+                  __typename
+                  ... on A {
+                    a
+                  }
+                  ... on B {
+                    b
+                  }
+                }
+            }
+            ''')
+        def rootField = (query.children[0] as OperationDefinition).selectionSet.selections[0] as Field
+        QueryTransformer queryTransformer = QueryTransformer.newQueryTransformer()
+                .schema(schema)
+                .root(rootField.getSelectionSet())
+                .rootParentType(schema.getType("SomeUnion") as GraphQLFieldsContainer)
+                .fragmentsByName([:])
+                .variables([:])
+                .build()
+
+        def visitor = new QueryVisitorStub() {
+            @Override
+            void visitField(QueryVisitorFieldEnvironment env) {
+                if (env.field.name == "a") {
+                    changeNode(env.traverserContext, env.field.transform({ builder -> builder.name("aX") }))
+                }
+            }
+        }
+
+
+        when:
+        def newNode = queryTransformer.transform(visitor)
+        then:
+        printAstCompact(newNode) == "{__typename ... on A {aX} ... on B {b}}"
+
     }
 }

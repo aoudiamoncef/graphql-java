@@ -1,9 +1,9 @@
 package graphql.cachecontrol
 
-
+import graphql.ExecutionInput
 import graphql.ExecutionResultImpl
 import graphql.TestUtil
-import graphql.execution.ExecutionPath
+import graphql.execution.ResultPath
 import graphql.schema.DataFetcher
 import spock.lang.Specification
 
@@ -11,10 +11,10 @@ class CacheControlTest extends Specification {
 
     def "can build up hints when there is no extensions present"() {
         def cc = CacheControl.newCacheControl()
-        cc.hint(ExecutionPath.parse("/hint/99"), 99)
-        cc.hint(ExecutionPath.parse("/hint/66"), 66)
-        cc.hint(ExecutionPath.parse("/hint/33/private"), 33, CacheControl.Scope.PRIVATE)
-        cc.hint(ExecutionPath.parse("/hint/private"), CacheControl.Scope.PRIVATE)
+        cc.hint(ResultPath.parse("/hint/99"), 99)
+        cc.hint(ResultPath.parse("/hint/66"), 66)
+        cc.hint(ResultPath.parse("/hint/33/private"), 33, CacheControl.Scope.PRIVATE)
+        cc.hint(ResultPath.parse("/hint/private"), CacheControl.Scope.PRIVATE)
 
         def er = ExecutionResultImpl.newExecutionResult().data("data").build()
 
@@ -38,8 +38,8 @@ class CacheControlTest extends Specification {
 
     def "can build up hints when extensions are present"() {
         def cc = CacheControl.newCacheControl()
-        cc.hint(ExecutionPath.parse("/hint/99"), 99)
-        cc.hint(ExecutionPath.parse("/hint/66"), 66)
+        cc.hint(ResultPath.parse("/hint/99"), 99)
+        cc.hint(ResultPath.parse("/hint/66"), 66)
 
         def startingExtensions = ["someExistingExt": "data"]
 
@@ -76,18 +76,18 @@ class CacheControlTest extends Specification {
         '''
 
         DataFetcher dfA = { env ->
-            CacheControl cc = env.getContext()
+            CacheControl cc = env.getGraphQlContext().get("cacheControl")
             cc.hint(env, 100)
-        }
+        } as DataFetcher
         DataFetcher dfB = { env ->
-            CacheControl cc = env.getContext()
+            CacheControl cc = env.getGraphQlContext().get("cacheControl")
             cc.hint(env, 999)
-        }
+        } as DataFetcher
 
         DataFetcher dfC = { env ->
-            CacheControl cc = env.getContext()
+            CacheControl cc = env.getGraphQlContext().get("cacheControl")
             cc.hint(env, CacheControl.Scope.PRIVATE)
-        }
+        } as DataFetcher
 
         def graphQL = TestUtil.graphQL(sdl, [
                 Query : [levelA: dfA,],
@@ -97,10 +97,10 @@ class CacheControlTest extends Specification {
 
         def cacheControl = CacheControl.newCacheControl()
         when:
-        def er = graphQL.execute({ input ->
-            input.context(cacheControl)
-                    .query(' { levelA { levelB { levelC } } }')
-        })
+        ExecutionInput ei = ExecutionInput.newExecutionInput(' { levelA { levelB { levelC } } }')
+                .graphQLContext(["cacheControl": cacheControl])
+                .build()
+        def er = graphQL.execute(ei)
         er = cacheControl.addTo(er)
         then:
         er.errors.isEmpty()

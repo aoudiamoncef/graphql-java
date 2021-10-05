@@ -21,8 +21,11 @@ import graphql.validation.rules.OverlappingFieldsCanBeMerged;
 import graphql.validation.rules.PossibleFragmentSpreads;
 import graphql.validation.rules.ProvidedNonNullArguments;
 import graphql.validation.rules.ScalarLeafs;
+import graphql.validation.rules.UniqueArgumentNamesRule;
 import graphql.validation.rules.UniqueDirectiveNamesPerLocation;
+import graphql.validation.rules.UniqueFragmentNames;
 import graphql.validation.rules.UniqueOperationNames;
+import graphql.validation.rules.UniqueVariableNamesRule;
 import graphql.validation.rules.VariableDefaultValuesOfCorrectType;
 import graphql.validation.rules.VariableTypesMatchRule;
 import graphql.validation.rules.VariablesAreInputTypes;
@@ -33,19 +36,41 @@ import java.util.List;
 @Internal
 public class Validator {
 
+    static int MAX_VALIDATION_ERRORS = 100;
+
+    /**
+     * `graphql-java` will stop validation after a maximum number of validation messages has been reached.  Attackers
+     * can send pathologically invalid queries to induce a Denial of Service attack and fill memory with 10000s of errors
+     * and burn CPU in process.
+     *
+     * By default, this is set to 100 errors.  You can set a new JVM wide value as the maximum allowed validation errors.
+     *
+     * @param maxValidationErrors the maximum validation errors allow JVM wide
+     */
+    public static void setMaxValidationErrors(int maxValidationErrors) {
+        MAX_VALIDATION_ERRORS = maxValidationErrors;
+    }
+
+    public static int getMaxValidationErrors() {
+        return MAX_VALIDATION_ERRORS;
+    }
+
     public List<ValidationError> validateDocument(GraphQLSchema schema, Document document) {
         ValidationContext validationContext = new ValidationContext(schema, document);
 
-
-        ValidationErrorCollector validationErrorCollector = new ValidationErrorCollector();
+        ValidationErrorCollector validationErrorCollector = new ValidationErrorCollector(MAX_VALIDATION_ERRORS);
         List<AbstractRule> rules = createRules(validationContext, validationErrorCollector);
         LanguageTraversal languageTraversal = new LanguageTraversal();
-        languageTraversal.traverse(document, new RulesVisitor(validationContext, rules));
+        try {
+            languageTraversal.traverse(document, new RulesVisitor(validationContext, rules));
+        } catch (ValidationErrorCollector.MaxValidationErrorsReached ignored) {
+            // if we have generated enough errors, then we can shortcut out
+        }
 
         return validationErrorCollector.getErrors();
     }
 
-    private List<AbstractRule> createRules(ValidationContext validationContext, ValidationErrorCollector validationErrorCollector) {
+    public List<AbstractRule> createRules(ValidationContext validationContext, ValidationErrorCollector validationErrorCollector) {
         List<AbstractRule> rules = new ArrayList<>();
 
         ExecutableDefinitions executableDefinitions = new ExecutableDefinitions(validationContext, validationErrorCollector);
@@ -101,8 +126,17 @@ public class Validator {
         UniqueOperationNames uniqueOperationNames = new UniqueOperationNames(validationContext, validationErrorCollector);
         rules.add(uniqueOperationNames);
 
+        UniqueFragmentNames uniqueFragmentNames = new UniqueFragmentNames(validationContext, validationErrorCollector);
+        rules.add(uniqueFragmentNames);
+
         UniqueDirectiveNamesPerLocation uniqueDirectiveNamesPerLocation = new UniqueDirectiveNamesPerLocation(validationContext, validationErrorCollector);
         rules.add(uniqueDirectiveNamesPerLocation);
+
+        UniqueArgumentNamesRule uniqueArgumentNamesRule = new UniqueArgumentNamesRule(validationContext, validationErrorCollector);
+        rules.add(uniqueArgumentNamesRule);
+
+        UniqueVariableNamesRule uniqueVariableNamesRule = new UniqueVariableNamesRule(validationContext, validationErrorCollector);
+        rules.add(uniqueVariableNamesRule);
 
         return rules;
     }

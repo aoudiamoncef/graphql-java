@@ -1,5 +1,7 @@
 package graphql.execution
 
+import graphql.GraphQLContext
+import graphql.cachecontrol.CacheControl
 import graphql.execution.instrumentation.Instrumentation
 import graphql.language.Document
 import graphql.language.FragmentDefinition
@@ -37,6 +39,9 @@ class ExecutionContextBuilderTest extends Specification {
         def context = "context"
         executionContextBuilder.context(context)
 
+        def graphQLContext = GraphQLContext.newContext().build()
+        executionContextBuilder.graphQLContext(graphQLContext)
+
         def root = "root"
         executionContextBuilder.root(root)
 
@@ -53,7 +58,10 @@ class ExecutionContextBuilderTest extends Specification {
         executionContextBuilder.variables([var: 'value'])
 
         def dataLoaderRegistry = new DataLoaderRegistry()
-        executionContextBuilder.dataLoaderRegistry(dataLoaderRegistry);
+        executionContextBuilder.dataLoaderRegistry(dataLoaderRegistry)
+
+        def cacheControl = CacheControl.newCacheControl()
+        executionContextBuilder.cacheControl(cacheControl)
 
         when:
         def executionContext = executionContextBuilder.build()
@@ -67,9 +75,11 @@ class ExecutionContextBuilderTest extends Specification {
         executionContext.subscriptionStrategy == subscriptionStrategy
         executionContext.root == root
         executionContext.context == context
+        executionContext.graphQLContext == graphQLContext
         executionContext.variables == [var: 'value']
         executionContext.getFragmentsByName() == [MyFragment: fragment]
         executionContext.operationDefinition == operation
         executionContext.dataLoaderRegistry == dataLoaderRegistry
+        executionContext.cacheControl == cacheControl
     }
 }

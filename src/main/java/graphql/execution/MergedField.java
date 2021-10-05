@@ -1,11 +1,13 @@
 package graphql.execution;
 
+import com.google.common.collect.ImmutableList;
 import graphql.PublicApi;
 import graphql.language.Argument;
 import graphql.language.Field;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import static graphql.Assert.assertNotEmpty;
@@ -58,11 +60,13 @@ import static graphql.Assert.assertNotEmpty;
 @PublicApi
 public class MergedField {
 
-    private final List<Field> fields;
+    private final ImmutableList<Field> fields;
+    private final Field singleField;
 
     private MergedField(List<Field> fields) {
         assertNotEmpty(fields);
-        this.fields = new ArrayList<>(fields);
+        this.fields = ImmutableList.copyOf(fields);
+        this.singleField = fields.get(0);
     }
 
     /**
@@ -73,7 +77,7 @@ public class MergedField {
      * @return the name of of the merged fields.
      */
     public String getName() {
-        return fields.get(0).getName();
+        return singleField.getName();
     }
 
     /**
@@ -83,11 +87,7 @@ public class MergedField {
      * @return the key for this MergedField.
      */
     public String getResultKey() {
-        Field singleField = getSingleField();
-        if (singleField.getAlias() != null) {
-            return singleField.getAlias();
-        }
-        return singleField.getName();
+        return singleField.getResultKey();
     }
 
     /**
@@ -99,7 +99,7 @@ public class MergedField {
      * @return the fist of the merged Fields
      */
     public Field getSingleField() {
-        return fields.get(0);
+        return singleField;
     }
 
     /**
@@ -108,7 +108,7 @@ public class MergedField {
      * @return the list of arguments
      */
     public List<Argument> getArguments() {
-        return getSingleField().getArguments();
+        return singleField.getArguments();
     }
 
 
@@ -118,7 +118,7 @@ public class MergedField {
      * @return all merged fields
      */
     public List<Field> getFields() {
-        return new ArrayList<>(fields);
+        return fields;
     }
 
     public static Builder newMergedField() {
@@ -140,18 +140,19 @@ public class MergedField {
     }
 
     public static class Builder {
-        private List<Field> fields = new ArrayList<>();
+
+        private final List<Field> fields;
 
         private Builder() {
-
+            this.fields = new ArrayList<>();
         }
 
         private Builder(MergedField existing) {
-            this.fields = existing.getFields();
+            this.fields = new ArrayList<>(existing.getFields());
         }
 
         public Builder fields(List<Field> fields) {
-            this.fields = fields;
+            this.fields.addAll(fields);
             return this;
         }
 
@@ -164,7 +165,23 @@ public class MergedField {
             return new MergedField(fields);
         }
 
+    }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        MergedField that = (MergedField) o;
+        return fields.equals(that.fields);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(fields);
     }
 
     @Override

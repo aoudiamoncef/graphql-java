@@ -1,10 +1,13 @@
 package graphql.validation.rules;
 
 
+import graphql.Internal;
 import graphql.language.Argument;
 import graphql.language.Directive;
 import graphql.language.Field;
 import graphql.language.Node;
+import graphql.language.NullValue;
+import graphql.language.Value;
 import graphql.schema.GraphQLArgument;
 import graphql.schema.GraphQLDirective;
 import graphql.schema.GraphQLFieldDefinition;
@@ -19,6 +22,7 @@ import java.util.Map;
 
 import static graphql.schema.GraphQLTypeUtil.isNonNull;
 
+@Internal
 public class ProvidedNonNullArguments extends AbstractRule {
 
     public ProvidedNonNullArguments(ValidationContext validationContext, ValidationErrorCollector validationErrorCollector) {
@@ -28,16 +32,46 @@ public class ProvidedNonNullArguments extends AbstractRule {
     @Override
     public void checkField(Field field) {
         GraphQLFieldDefinition fieldDef = getValidationContext().getFieldDef();
-        if (fieldDef == null) return;
+        if (fieldDef == null) {
+            return;
+        }
         Map<String, Argument> argumentMap = argumentMap(field.getArguments());
 
         for (GraphQLArgument graphQLArgument : fieldDef.getArguments()) {
             Argument argument = argumentMap.get(graphQLArgument.getName());
-            if (argument == null
-                    && (isNonNull(graphQLArgument.getType()))
-                    && (graphQLArgument.getDefaultValue() == null)) {
+            boolean nonNullType = isNonNull(graphQLArgument.getType());
+            boolean noDefaultValue = graphQLArgument.getArgumentDefaultValue().isNotSet();
+            if (argument == null && nonNullType && noDefaultValue) {
                 String message = String.format("Missing field argument %s", graphQLArgument.getName());
                 addError(ValidationErrorType.MissingFieldArgument, field.getSourceLocation(), message);
+            }
+
+            if (argument != null) {
+                Value value = argument.getValue();
+                if ((value == null || value instanceof NullValue) && nonNullType && noDefaultValue) {
+                    String message = String.format("null value for non-null field argument %s", graphQLArgument.getName());
+                    addError(ValidationErrorType.NullValueForNonNullArgument, field.getSourceLocation(), message);
+                }
+            }
+        }
+    }
+
+
+    @Override
+    public void checkDirective(Directive directive, List<Node> ancestors) {
+        GraphQLDirective graphQLDirective = getValidationContext().getDirective();
+        if (graphQLDirective == null) {
+            return;
+        }
+        Map<String, Argument> argumentMap = argumentMap(directive.getArguments());
+
+        for (GraphQLArgument graphQLArgument : graphQLDirective.getArguments()) {
+            Argument argument = argumentMap.get(graphQLArgument.getName());
+            boolean nonNullType = isNonNull(graphQLArgument.getType());
+            boolean noDefaultValue = graphQLArgument.getArgumentDefaultValue().isNotSet();
+            if (argument == null && nonNullType && noDefaultValue) {
+                String message = String.format("Missing directive argument %s", graphQLArgument.getName());
+                addError(ValidationErrorType.MissingDirectiveArgument, directive.getSourceLocation(), message);
             }
         }
     }
@@ -48,22 +82,5 @@ public class ProvidedNonNullArguments extends AbstractRule {
             result.put(argument.getName(), argument);
         }
         return result;
-    }
-
-
-    @Override
-    public void checkDirective(Directive directive, List<Node> ancestors) {
-        GraphQLDirective graphQLDirective = getValidationContext().getDirective();
-        if (graphQLDirective == null) return;
-        Map<String, Argument> argumentMap = argumentMap(directive.getArguments());
-
-        for (GraphQLArgument graphQLArgument : graphQLDirective.getArguments()) {
-            Argument argument = argumentMap.get(graphQLArgument.getName());
-            if (argument == null
-                    && (isNonNull(graphQLArgument.getType()))) {
-                String message = String.format("Missing directive argument %s", graphQLArgument.getName());
-                addError(ValidationErrorType.MissingDirectiveArgument, directive.getSourceLocation(), message);
-            }
-        }
     }
 }

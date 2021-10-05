@@ -1,13 +1,14 @@
 package graphql.language;
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 import static graphql.Assert.assertNotNull;
 import static graphql.Assert.assertTrue;
@@ -22,29 +23,29 @@ import static graphql.Assert.assertTrue;
 public class NodeParentTree<T extends Node> {
 
     private final T node;
-    private final Optional<NodeParentTree<T>> parent;
-    private final List<String> path;
+    private final NodeParentTree<T> parent;
+    private final ImmutableList<String> path;
 
     @Internal
     public NodeParentTree(Deque<T> nodeStack) {
-        assertNotNull(nodeStack, "You MUST have a non null stack of nodes");
-        assertTrue(!nodeStack.isEmpty(), "You MUST have a non empty stack of nodes");
+        assertNotNull(nodeStack, () -> "You MUST have a non null stack of nodes");
+        assertTrue(!nodeStack.isEmpty(), () -> "You MUST have a non empty stack of nodes");
 
         Deque<T> copy = new ArrayDeque<>(nodeStack);
         path = mkPath(copy);
         node = copy.pop();
         if (!copy.isEmpty()) {
-            parent = Optional.of(new NodeParentTree<T>(copy));
+            parent = new NodeParentTree<T>(copy);
         } else {
-            parent = Optional.empty();
+            parent = null;
         }
     }
 
-    private List<String> mkPath(Deque<T> copy) {
+    private ImmutableList<String> mkPath(Deque<T> copy) {
         return copy.stream()
                 .filter(node1 -> node1 instanceof NamedNode)
                 .map(node1 -> ((NamedNode) node1).getName())
-                .collect(Collectors.toList());
+                .collect(ImmutableList.toImmutableList());
     }
 
 
@@ -61,7 +62,7 @@ public class NodeParentTree<T extends Node> {
      * @return a node MAY have an optional parent
      */
     public Optional<NodeParentTree<T>> getParentInfo() {
-        return parent;
+        return Optional.ofNullable(parent);
     }
 
     /**
@@ -71,10 +72,24 @@ public class NodeParentTree<T extends Node> {
         return path;
     }
 
+    /**
+     * @return the tree as a list of T
+     */
+    public List<T> toList() {
+        List<T> nodes = new ArrayList<>();
+        nodes.add(node);
+        Optional<NodeParentTree<T>> parentInfo = this.getParentInfo();
+        while (parentInfo.isPresent()) {
+            nodes.add(parentInfo.get().getNode());
+            parentInfo = parentInfo.get().getParentInfo();
+        }
+        return nodes;
+    }
+
     @Override
     public String toString() {
         return String.valueOf(node) +
                 " - parent : " +
-                parent.isPresent();
+                parent;
     }
 }

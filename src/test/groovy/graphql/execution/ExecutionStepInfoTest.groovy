@@ -1,6 +1,7 @@
 package graphql.execution
 
 import graphql.ExecutionInput
+import graphql.Scalars
 import graphql.TestUtil
 import graphql.language.Field
 import graphql.schema.DataFetcher
@@ -11,6 +12,7 @@ import graphql.schema.GraphQLNonNull
 import graphql.schema.GraphQLObjectType
 import graphql.schema.GraphQLType
 import graphql.schema.GraphQLTypeUtil
+import graphql.schema.TypeResolver
 import spock.lang.Specification
 
 import java.util.function.Function
@@ -21,6 +23,7 @@ import static graphql.TestUtil.mergedField
 import static graphql.schema.GraphQLFieldDefinition.newFieldDefinition
 import static graphql.schema.GraphQLList.list
 import static graphql.schema.GraphQLNonNull.nonNull
+import static graphql.schema.GraphQLTypeUtil.simplePrint
 import static graphql.schema.GraphQLTypeUtil.unwrapAll
 import static graphql.schema.idl.RuntimeWiring.newRuntimeWiring
 import static graphql.schema.idl.TypeRuntimeWiring.newTypeWiring
@@ -73,7 +76,7 @@ class ExecutionStepInfoTest extends Specification {
         nonNullFieldTypeInfo.parent.type == rootType
         nonNullFieldTypeInfo.isNonNullType()
 
-        listTypeInfo.getUnwrappedNonNullType() == list(fieldType)
+        list(fieldType).isEqualTo(listTypeInfo.getUnwrappedNonNullType())
         listTypeInfo.hasParent()
         listTypeInfo.parent.type == rootType
         listTypeInfo.isListType()
@@ -189,7 +192,7 @@ class ExecutionStepInfoTest extends Specification {
         executionTypeInfos[0].path.toString() == "/hero"
         (executionTypeInfos[0].type as GraphQLObjectType).name == "User"
         executionTypeInfos[0].field.getName() == "hero"
-        executionTypeInfos[0].parent.path == ExecutionPath.rootPath()
+        executionTypeInfos[0].parent.path == ResultPath.rootPath()
         (executionTypeInfos[0].parent.type as GraphQLObjectType).name == "Query"
         executionTypeInfos[0].arguments == [id: "1234"]
         executionTypeInfos[0].getArgument("id") == "1234"
@@ -213,5 +216,102 @@ class ExecutionStepInfoTest extends Specification {
             assert executionTypeInfos[i].parent.field.name == "friends"
             assert (unwrapAll(executionTypeInfos[i].parent.type) as GraphQLObjectType).name == "User"
         }
+    }
+
+
+    def "transform copies fieldContainer"() {
+        given:
+        ExecutionStepInfo executionStepInfo = newExecutionStepInfo()
+                .type(Scalars.GraphQLString)
+                .fieldContainer(GraphQLObjectType.newObject().name("foo").build())
+                .build()
+        when:
+        def transformed = executionStepInfo.transform({ builder -> builder })
+
+        then:
+        transformed.getObjectType() == executionStepInfo.getObjectType()
+    }
+
+    def "step info for list of lists of abstract type"() {
+        def spec = '''
+            type Query {
+                pets: [[Pet]]
+            }
+            
+            interface Pet {
+                names : [String]
+            }
+            type Cat implements Pet {
+                names : [String]
+            }
+            type Dog implements Pet {
+                names : [String]
+            }
+        '''
+
+        def dog = [name: "Dog", __typename: "Dog"]
+        def cat = [name: "Cat", __typename: "Cat"]
+        def petTypeResolver = { it -> it.schema.getObjectType(it.object.__typename) } as TypeResolver
+
+
+        ExecutionStepInfo dogStepInfo
+        def dogDf = { it ->
+            dogStepInfo = it.getExecutionStepInfo()
+            return null
+        } as DataFetcher
+
+
+        ExecutionStepInfo catStepInfo
+        def catDf = { it ->
+            catStepInfo = it.getExecutionStepInfo()
+            return null
+        } as DataFetcher
+
+        def pets = [[dog], [cat]]
+        def runtimeWiring = newRuntimeWiring()
+                .type(newTypeWiring("Query").dataFetcher("pets", { it -> pets }))
+                .type(newTypeWiring("Pet").typeResolver(petTypeResolver).build())
+                .type(newTypeWiring("Cat").dataFetcher("names", catDf).build())
+                .type(newTypeWiring("Dog").dataFetcher("names", dogDf).build())
+                .build()
+
+        def graphQL = TestUtil.graphQL(spec, runtimeWiring).build()
+
+        def query = ''' 
+            {
+               pets {names} 
+            }
+            '''
+        def executionInput = ExecutionInput.newExecutionInput().query(query).build()
+        when:
+        graphQL.execute(executionInput)
+        then:
+        // dog info
+        dogStepInfo.path.toString() == "/pets[0][0]/names"
+        simplePrint(dogStepInfo.type) == "[String]"
+
+        dogStepInfo.parent.path.toString() == "/pets[0][0]"
+        simplePrint(dogStepInfo.parent.type) == "Dog"
+
+        dogStepInfo.parent.parent.path.toString() == "/pets[0]"
+        simplePrint(dogStepInfo.parent.parent.type) == "[Pet]"
+
+        dogStepInfo.parent.parent.parent.path.toString() == "/pets"
+        simplePrint(dogStepInfo.parent.parent.parent.type) == "[[Pet]]"
+
+        // cat info
+        catStepInfo.path.toString() == "/pets[1][0]/names"
+        simplePrint(catStepInfo.type) == "[String]"
+
+        catStepInfo.parent.path.toString() == "/pets[1][0]"
+        simplePrint(catStepInfo.parent.type) == "Cat"
+
+        catStepInfo.parent.parent.path.toString() == "/pets[1]"
+        simplePrint(catStepInfo.parent.parent.type) == "[Pet]"
+
+        catStepInfo.parent.parent.parent.path.toString() == "/pets"
+        simplePrint(catStepInfo.parent.parent.parent.type) == "[[Pet]]"
+
+
     }
 }

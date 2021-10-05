@@ -21,7 +21,6 @@ public class FetchedValueAnalysis {
         LIST,
         SCALAR,
         ENUM,
-        DEFER
     }
 
     private final FetchedValueType valueType;
@@ -105,6 +104,20 @@ public class FetchedValueAnalysis {
 
     public String getResultKey() {
         return executionStepInfo.getResultKey();
+    }
+
+    @Override
+    public String toString() {
+        return "{" +
+                "valueType=" + valueType +
+                ", completedValue=" + completedValue +
+                ", errors=" + errors +
+                ", children=" + children +
+                ", stepInfo=" + executionStepInfo +
+                ", nullValue=" + nullValue +
+                ", resolvedType=" + resolvedType +
+                ", fetchedValue=" + fetchedValue +
+                '}';
     }
 
     public static final class Builder {

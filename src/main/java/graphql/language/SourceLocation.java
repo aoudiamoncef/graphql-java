@@ -4,9 +4,12 @@ package graphql.language;
 import graphql.PublicApi;
 
 import java.io.Serializable;
+import java.util.Objects;
 
 @PublicApi
 public class SourceLocation implements Serializable {
+
+    public static final SourceLocation EMPTY = new SourceLocation(-1, -1);
 
     private final int line;
     private final int column;
@@ -36,21 +39,30 @@ public class SourceLocation implements Serializable {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
 
         SourceLocation that = (SourceLocation) o;
 
-        if (line != that.line) return false;
-        if (column != that.column) return false;
-        return sourceName != null ? sourceName.equals(that.sourceName) : that.sourceName == null;
+        if (line != that.line) {
+            return false;
+        }
+        if (column != that.column) {
+            return false;
+        }
+        return Objects.equals(sourceName, that.sourceName);
     }
 
     @Override
     public int hashCode() {
-        int result = line;
-        result = 31 * result + column;
-        result = 31 * result + (sourceName != null ? sourceName.hashCode() : 0);
+        int result = 1;
+        result = 31 * result + Integer.hashCode(line);
+        result = 31 * result + Integer.hashCode(column);
+        result = 31 * result + Objects.hashCode(sourceName);
         return result;
     }
 

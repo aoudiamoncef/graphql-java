@@ -3,20 +3,16 @@ package graphql.execution.instrumentation.dataloader;
 import graphql.Assert;
 import graphql.ExecutionResult;
 import graphql.Internal;
-import graphql.execution.ExecutionPath;
 import graphql.execution.FieldValueInfo;
-import graphql.execution.MergedField;
-import graphql.execution.instrumentation.DeferredFieldInstrumentationContext;
+import graphql.execution.ResultPath;
 import graphql.execution.instrumentation.ExecutionStrategyInstrumentationContext;
 import graphql.execution.instrumentation.InstrumentationContext;
 import graphql.execution.instrumentation.InstrumentationState;
-import graphql.execution.instrumentation.parameters.InstrumentationDeferredFieldParameters;
 import graphql.execution.instrumentation.parameters.InstrumentationExecutionStrategyParameters;
 import graphql.execution.instrumentation.parameters.InstrumentationFieldFetchParameters;
 import org.dataloader.DataLoaderRegistry;
 import org.slf4j.Logger;
 
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,13 +20,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * This approach uses field level tracking to achieve its aims of making the data loader more efficient
  */
 @Internal
 public class FieldLevelTrackingApproach {
-    private final DataLoaderRegistry dataLoaderRegistry;
+    private final Supplier<DataLoaderRegistry> dataLoaderRegistrySupplier;
     private final Logger log;
 
     private static class CallStack implements InstrumentationState {
@@ -118,8 +115,8 @@ public class FieldLevelTrackingApproach {
         }
     }
 
-    public FieldLevelTrackingApproach(Logger log, DataLoaderRegistry dataLoaderRegistry) {
-        this.dataLoaderRegistry = dataLoaderRegistry;
+    public FieldLevelTrackingApproach(Logger log, Supplier<DataLoaderRegistry> dataLoaderRegistrySupplier) {
+        this.dataLoaderRegistrySupplier = dataLoaderRegistrySupplier;
         this.log = log;
     }
 
@@ -129,7 +126,7 @@ public class FieldLevelTrackingApproach {
 
     ExecutionStrategyInstrumentationContext beginExecutionStrategy(InstrumentationExecutionStrategyParameters parameters) {
         CallStack callStack = parameters.getInstrumentationState();
-        ExecutionPath path = parameters.getExecutionStrategyParameters().getPath();
+        ResultPath path = parameters.getExecutionStrategyParameters().getPath();
         int parentLevel = path.getLevel();
         int curLevel = parentLevel + 1;
         int fieldCount = parameters.getExecutionStrategyParameters().getFields().size();
@@ -161,15 +158,9 @@ public class FieldLevelTrackingApproach {
             }
 
             @Override
-            public void onDeferredField(MergedField field) {
-                boolean dispatchNeeded;
-                // fake fetch count for this field
+            public void onFieldValuesException() {
                 synchronized (callStack) {
-                    callStack.increaseFetchCount(curLevel);
-                    dispatchNeeded = dispatchIfNeeded(callStack, curLevel);
-                }
-                if (dispatchNeeded) {
-                    dispatch();
+                    callStack.increaseHappenedOnFieldValueCalls(curLevel);
                 }
             }
         };
@@ -204,39 +195,10 @@ public class FieldLevelTrackingApproach {
         return result;
     }
 
-    DeferredFieldInstrumentationContext beginDeferredField(InstrumentationDeferredFieldParameters parameters) {
-        CallStack callStack = parameters.getInstrumentationState();
-        int level = parameters.getExecutionStrategyParameters().getPath().getLevel();
-        synchronized (callStack) {
-            callStack.clearAndMarkCurrentLevelAsReady(level);
-        }
-
-        return new DeferredFieldInstrumentationContext() {
-            @Override
-            public void onDispatched(CompletableFuture<ExecutionResult> result) {
-
-            }
-
-            @Override
-            public void onCompleted(ExecutionResult result, Throwable t) {
-            }
-
-            @Override
-            public void onFieldValueInfo(FieldValueInfo fieldValueInfo) {
-                boolean dispatchNeeded;
-                synchronized (callStack) {
-                    dispatchNeeded = handleOnFieldValuesInfo(Collections.singletonList(fieldValueInfo), callStack, level);
-                }
-                if (dispatchNeeded) {
-                    dispatch();
-                }
-            }
-        };
-    }
 
     public InstrumentationContext<Object> beginFieldFetch(InstrumentationFieldFetchParameters parameters) {
         CallStack callStack = parameters.getInstrumentationState();
-        ExecutionPath path = parameters.getEnvironment().getExecutionStepInfo().getPath();
+        ResultPath path = parameters.getEnvironment().getExecutionStepInfo().getPath();
         int level = path.getLevel();
         return new InstrumentationContext<Object>() {
 
@@ -286,7 +248,14 @@ public class FieldLevelTrackingApproach {
     }
 
     void dispatch() {
-        log.debug("Dispatching data loaders ({})", dataLoaderRegistry.getKeys());
+        DataLoaderRegistry dataLoaderRegistry = getDataLoaderRegistry();
+        if (log.isDebugEnabled()) {
+            log.debug("Dispatching data loaders ({})", dataLoaderRegistry.getKeys());
+        }
         dataLoaderRegistry.dispatchAll();
+    }
+
+    private DataLoaderRegistry getDataLoaderRegistry() {
+        return dataLoaderRegistrySupplier.get();
     }
 }

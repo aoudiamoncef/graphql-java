@@ -1,15 +1,22 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 import static graphql.language.NodeUtil.assertNewChildrenAreEmpty;
 
@@ -19,8 +26,8 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
     private final String name;
 
     @Internal
-    protected TypeName(String name, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected TypeName(String name, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.name = name;
     }
 
@@ -30,7 +37,7 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
      * @param name of the type
      */
     public TypeName(String name) {
-        this(name, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
 
@@ -40,7 +47,7 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
 
     @Override
     public List<Node> getChildren() {
-        return new ArrayList<>();
+        return emptyList();
     }
 
     @Override
@@ -65,12 +72,12 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
 
         TypeName that = (TypeName) o;
 
-        return NodeUtil.isEqualTo(this.name, that.name);
+        return Objects.equals(this.name, that.name);
     }
 
     @Override
     public TypeName deepCopy() {
-        return new TypeName(name, getSourceLocation(), getComments(), getIgnoredChars());
+        return new TypeName(name, getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -103,16 +110,18 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
     public static final class Builder implements NodeBuilder {
         private String name;
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(TypeName existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -127,7 +136,7 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -136,9 +145,18 @@ public class TypeName extends AbstractNode<TypeName> implements Type<TypeName>, 
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public TypeName build() {
-            TypeName typeName = new TypeName(name, sourceLocation, comments, ignoredChars);
-            return typeName;
+            return new TypeName(name, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

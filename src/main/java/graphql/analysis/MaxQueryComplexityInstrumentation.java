@@ -72,7 +72,7 @@ public class MaxQueryComplexityInstrumentation extends SimpleInstrumentation {
     public MaxQueryComplexityInstrumentation(int maxComplexity, FieldComplexityCalculator fieldComplexityCalculator,
                                              Function<QueryComplexityInfo, Boolean> maxQueryComplexityExceededFunction) {
         this.maxComplexity = maxComplexity;
-        this.fieldComplexityCalculator = assertNotNull(fieldComplexityCalculator, "calculator can't be null");
+        this.fieldComplexityCalculator = assertNotNull(fieldComplexityCalculator, () -> "calculator can't be null");
         this.maxQueryComplexityExceededFunction = maxQueryComplexityExceededFunction;
     }
 
@@ -82,10 +82,10 @@ public class MaxQueryComplexityInstrumentation extends SimpleInstrumentation {
             if ((errors != null && errors.size() > 0) || throwable != null) {
                 return;
             }
-            QueryTraversal queryTraversal = newQueryTraversal(parameters);
+            QueryTraverser queryTraverser = newQueryTraverser(parameters);
 
             Map<QueryVisitorFieldEnvironment, Integer> valuesByParent = new LinkedHashMap<>();
-            queryTraversal.visitPostOrder(new QueryVisitorStub() {
+            queryTraverser.visitPostOrder(new QueryVisitorStub() {
                 @Override
                 public void visitField(QueryVisitorFieldEnvironment env) {
                     int childsComplexity = valuesByParent.getOrDefault(env, 0);
@@ -97,10 +97,13 @@ public class MaxQueryComplexityInstrumentation extends SimpleInstrumentation {
                 }
             });
             int totalComplexity = valuesByParent.getOrDefault(null, 0);
-            log.debug("Query complexity: {}", totalComplexity);
+            if (log.isDebugEnabled()) {
+                log.debug("Query complexity: {}", totalComplexity);
+            }
             if (totalComplexity > maxComplexity) {
                 QueryComplexityInfo queryComplexityInfo = QueryComplexityInfo.newQueryComplexityInfo()
                         .complexity(totalComplexity)
+                        .instrumentationValidationParameters(parameters)
                         .build();
                 boolean throwAbortException = maxQueryComplexityExceededFunction.apply(queryComplexityInfo);
                 if (throwAbortException) {
@@ -122,8 +125,8 @@ public class MaxQueryComplexityInstrumentation extends SimpleInstrumentation {
         return new AbortExecutionException("maximum query complexity exceeded " + totalComplexity + " > " + maxComplexity);
     }
 
-    QueryTraversal newQueryTraversal(InstrumentationValidationParameters parameters) {
-        return QueryTraversal.newQueryTraversal()
+    QueryTraverser newQueryTraverser(InstrumentationValidationParameters parameters) {
+        return QueryTraverser.newQueryTraverser()
                 .schema(parameters.getSchema())
                 .document(parameters.getDocument())
                 .operationName(parameters.getOperation())

@@ -1,7 +1,7 @@
 package graphql;
 
 import graphql.execution.DataFetcherResult;
-import graphql.execution.ExecutionPath;
+import graphql.execution.ResultPath;
 import graphql.language.SourceLocation;
 import graphql.schema.DataFetchingEnvironment;
 
@@ -21,7 +21,7 @@ public class GraphqlErrorBuilder {
     private String message;
     private List<Object> path;
     private List<SourceLocation> locations = new ArrayList<>();
-    private ErrorType errorType = ErrorType.DataFetchingException;
+    private ErrorClassification errorType = ErrorType.DataFetchingException;
     private Map<String, Object> extensions = null;
 
 
@@ -50,7 +50,11 @@ public class GraphqlErrorBuilder {
     }
 
     public GraphqlErrorBuilder message(String message, Object... formatArgs) {
-        this.message = String.format(assertNotNull(message), formatArgs);
+        if (formatArgs == null || formatArgs.length == 0) {
+            this.message = assertNotNull(message);
+        } else {
+            this.message = String.format(assertNotNull(message), formatArgs);
+        }
         return this;
     }
 
@@ -64,7 +68,7 @@ public class GraphqlErrorBuilder {
         return this;
     }
 
-    public GraphqlErrorBuilder path(ExecutionPath path) {
+    public GraphqlErrorBuilder path(ResultPath path) {
         this.path = assertNotNull(path).toList();
         return this;
     }
@@ -74,7 +78,7 @@ public class GraphqlErrorBuilder {
         return this;
     }
 
-    public GraphqlErrorBuilder errorType(ErrorType errorType) {
+    public GraphqlErrorBuilder errorType(ErrorClassification errorType) {
         this.errorType = assertNotNull(errorType);
         return this;
     }
@@ -88,33 +92,54 @@ public class GraphqlErrorBuilder {
      * @return a newly built GraphqlError
      */
     public GraphQLError build() {
-        assertNotNull(message, "You must provide error message");
-        return new GraphQLError() {
-            @Override
-            public String getMessage() {
-                return message;
-            }
+        assertNotNull(message, () -> "You must provide error message");
+        return new GraphqlErrorImpl(message, locations, errorType, path, extensions);
+    }
 
-            @Override
-            public List<SourceLocation> getLocations() {
-                return locations;
-            }
+    private static class GraphqlErrorImpl implements GraphQLError {
+        private final String message;
+        private final List<SourceLocation> locations;
+        private final ErrorClassification errorType;
+        private final List<Object> path;
+        private final Map<String, Object> extensions;
 
-            @Override
-            public ErrorType getErrorType() {
-                return errorType;
-            }
+        public GraphqlErrorImpl(String message, List<SourceLocation> locations, ErrorClassification errorType, List<Object> path, Map<String, Object> extensions) {
+            this.message = message;
+            this.locations = locations;
+            this.errorType = errorType;
+            this.path = path;
+            this.extensions = extensions;
+        }
 
-            @Override
-            public List<Object> getPath() {
-                return path;
-            }
+        @Override
+        public String getMessage() {
+            return message;
+        }
 
-            @Override
-            public Map<String, Object> getExtensions() {
-                return extensions;
-            }
-        };
+        @Override
+        public List<SourceLocation> getLocations() {
+            return locations;
+        }
+
+        @Override
+        public ErrorClassification getErrorType() {
+            return errorType;
+        }
+
+        @Override
+        public List<Object> getPath() {
+            return path;
+        }
+
+        @Override
+        public Map<String, Object> getExtensions() {
+            return extensions;
+        }
+
+        @Override
+        public String toString() {
+            return message;
+        }
     }
 
     /**

@@ -1,15 +1,20 @@
 package graphql.schema.validation;
 
+import graphql.Internal;
+
+import java.util.Objects;
+
 import static graphql.Assert.assertNotNull;
 
+@Internal
 public class SchemaValidationError {
 
     private final SchemaValidationErrorType errorType;
     private final String description;
 
     public SchemaValidationError(SchemaValidationErrorType errorType, String description) {
-        assertNotNull(errorType, "error type can not be null");
-        assertNotNull(description, "error description can not be null");
+        assertNotNull(errorType, () -> "error type can not be null");
+        assertNotNull(description, () -> "error description can not be null");
         this.errorType = errorType;
         this.description = description;
     }
@@ -24,7 +29,10 @@ public class SchemaValidationError {
 
     @Override
     public int hashCode() {
-        return errorType.hashCode() ^ description.hashCode();
+        int result = 1;
+        result = 31 * result + errorType.hashCode();
+        result = 31 * result + description.hashCode();
+        return result;
     }
 
     @Override

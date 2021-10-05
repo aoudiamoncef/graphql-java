@@ -53,13 +53,22 @@ public class AsyncDataFetcher<T> implements DataFetcher<CompletableFuture<T>> {
     private final DataFetcher<T> wrappedDataFetcher;
     private final Executor executor;
 
+
+    public DataFetcher<T> getWrappedDataFetcher() {
+        return wrappedDataFetcher;
+    }
+
+    public Executor getExecutor() {
+        return executor;
+    }
+
     public AsyncDataFetcher(DataFetcher<T> wrappedDataFetcher) {
         this(wrappedDataFetcher, ForkJoinPool.commonPool());
     }
 
     public AsyncDataFetcher(DataFetcher<T> wrappedDataFetcher, Executor executor) {
-        this.wrappedDataFetcher = assertNotNull(wrappedDataFetcher, "wrappedDataFetcher can't be null");
-        this.executor = assertNotNull(executor, "executor can't be null");
+        this.wrappedDataFetcher = assertNotNull(wrappedDataFetcher, () -> "wrappedDataFetcher can't be null");
+        this.executor = assertNotNull(executor, () -> "executor can't be null");
     }
 
     @Override

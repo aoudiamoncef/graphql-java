@@ -35,22 +35,27 @@ class SchemaDiffTest extends Specification {
 
     private static final TypeResolver NULL_TYPE_RESOLVER = { env -> null }
 
-    static GraphQLScalarType CUSTOM_SCALAR = new GraphQLScalarType("CustomScalar", "CustomScalar", new Coercing() {
-        @Override
-        Object serialize(Object dataFetcherResult) {
-            throw new UnsupportedOperationException("Not implemented")
-        }
+    static GraphQLScalarType CUSTOM_SCALAR = GraphQLScalarType
+            .newScalar()
+            .name("CustomScalar")
+            .description("CustomScalar")
+            .coercing(new Coercing() {
+                @Override
+                Object serialize(Object dataFetcherResult) {
+                    throw new UnsupportedOperationException("Not implemented")
+                }
 
-        @Override
-        Object parseValue(Object input) {
-            throw new UnsupportedOperationException("Not implemented")
-        }
+                @Override
+                Object parseValue(Object input) {
+                    throw new UnsupportedOperationException("Not implemented")
+                }
 
-        @Override
-        Object parseLiteral(Object input) {
-            throw new UnsupportedOperationException("Not implemented")
-        }
-    })
+                @Override
+                Object parseLiteral(Object input) {
+                    throw new UnsupportedOperationException("Not implemented")
+                }
+            })
+            .build()
 
     static RuntimeWiring wireWithNoFetching() {
 
@@ -317,6 +322,21 @@ class SchemaDiffTest extends Specification {
 
     }
 
+    def "changed nested input object field types"() {
+        DiffSet diffSet = diffSet("schema_changed_nested_input_object_fields.graphqls")
+
+        def diff = new SchemaDiff()
+        diff.diffSchema(diffSet, chainedReporter)
+
+        expect:
+        reporter.breakageCount == 1
+        reporter.breakages[0].category == DiffCategory.INVALID
+        reporter.breakages[0].typeName == 'NestedInput'
+        reporter.breakages[0].typeKind == TypeKind.InputObject
+        reporter.breakages[0].fieldName == 'nestedInput'
+
+    }
+
     def "changed input object field types"() {
         DiffSet diffSet = diffSet("schema_changed_input_object_fields.graphqls")
 
@@ -436,7 +456,7 @@ class SchemaDiffTest extends Specification {
 
     }
 
-    def "dangerous changes "() {
+    def "dangerous changes"() {
         DiffSet diffSet = diffSet("schema_dangerous_changes.graphqls")
 
         def diff = new SchemaDiff()
@@ -447,20 +467,94 @@ class SchemaDiffTest extends Specification {
         reporter.dangerCount == 3
 
         reporter.dangers[0].category == DiffCategory.ADDITION
-        reporter.dangers[0].typeName == "Character"
-        reporter.dangers[0].typeKind == TypeKind.Union
-        reporter.dangers[0].components.contains("BenignFigure")
+        reporter.dangers[0].typeName == "Temperament"
+        reporter.dangers[0].typeKind == TypeKind.Enum
+        reporter.dangers[0].components.contains("Nonplussed")
 
-        reporter.dangers[1].category == DiffCategory.DIFFERENT
-        reporter.dangers[1].typeName == "Query"
-        reporter.dangers[1].typeKind == TypeKind.Object
-        reporter.dangers[1].fieldName == "being"
-        reporter.dangers[1].components.contains("type")
+        reporter.dangers[1].category == DiffCategory.ADDITION
+        reporter.dangers[1].typeName == "Character"
+        reporter.dangers[1].typeKind == TypeKind.Union
+        reporter.dangers[1].components.contains("BenignFigure")
 
-        reporter.dangers[2].category == DiffCategory.ADDITION
-        reporter.dangers[2].typeName == "Temperament"
-        reporter.dangers[2].typeKind == TypeKind.Enum
-        reporter.dangers[2].components.contains("Nonplussed")
+        reporter.dangers[2].category == DiffCategory.DIFFERENT
+        reporter.dangers[2].typeName == "Query"
+        reporter.dangers[2].typeKind == TypeKind.Object
+        reporter.dangers[2].fieldName == "being"
+        reporter.dangers[2].components.contains("type")
+
+
+    }
+
+    def "field was deprecated"() {
+        DiffSet diffSet = diffSet("schema_deprecated_fields_new.graphqls")
+
+        def diff = new SchemaDiff()
+        diff.diffSchema(diffSet, chainedReporter)
+
+        expect:
+        reporter.dangerCount == 13
+        reporter.breakageCount == 0
+        reporter.dangers.every {
+            it.getCategory() == DiffCategory.DEPRECATION_ADDED
+        }
+
+    }
+
+    def "deprecated field was removed"() {
+        def schemaOld = TestUtil.schemaFile("diff/" + "schema_deprecated_fields_new.graphqls", wireWithNoFetching())
+        def schemaNew = TestUtil.schemaFile("diff/" + "schema_deprecated_fields_removed.graphqls", wireWithNoFetching())
+
+        DiffSet diffSet = DiffSet.diffSet(schemaOld, schemaNew)
+
+        def diff = new SchemaDiff()
+        diff.diffSchema(diffSet, chainedReporter)
+
+        expect:
+        reporter.dangerCount == 0
+        reporter.breakageCount == 11
+        reporter.breakages.every {
+            it.getCategory() == DiffCategory.DEPRECATION_REMOVED
+        }
+    }
+
+    def "union members are checked"() {
+        def oldSchema = TestUtil.schema('''
+        type Query {
+            foo: Foo
+        }
+        union Foo = A | B 
+        type A {
+            a: String
+            toRemove: String 
+        }
+        type B {
+            b: String
+        }
+       ''')
+        def newSchema = TestUtil.schema('''
+        type Query {
+            foo: Foo
+        }
+        union Foo = A | B 
+        type A {
+            a: String
+        }
+        type B {
+            b: String
+        }
+       ''')
+        def reporter = new CapturingReporter()
+        DiffSet diffSet = DiffSet.diffSet(oldSchema, newSchema)
+        def diff = new SchemaDiff()
+        when:
+        diff.diffSchema(diffSet, reporter)
+
+        then:
+        reporter.dangerCount == 0
+        reporter.breakageCount == 1
+        reporter.breakages.every {
+            it.getCategory() == DiffCategory.MISSING
+        }
 
     }
 

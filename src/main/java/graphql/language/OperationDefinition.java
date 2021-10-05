@@ -1,19 +1,27 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
-public class OperationDefinition extends AbstractNode<OperationDefinition> implements Definition<OperationDefinition>, SelectionSetContainer<OperationDefinition> {
+public class OperationDefinition extends AbstractNode<OperationDefinition> implements Definition<OperationDefinition>, SelectionSetContainer<OperationDefinition>, DirectivesContainer<OperationDefinition> {
 
     public enum Operation {
         QUERY, MUTATION, SUBSCRIPTION
@@ -22,8 +30,8 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
     private final String name;
 
     private final Operation operation;
-    private final List<VariableDefinition> variableDefinitions;
-    private final List<Directive> directives;
+    private final ImmutableList<VariableDefinition> variableDefinitions;
+    private final ImmutableList<Directive> directives;
     private final SelectionSet selectionSet;
 
     public static final String CHILD_VARIABLE_DEFINITIONS = "variableDefinitions";
@@ -38,22 +46,23 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
                                   SelectionSet selectionSet,
                                   SourceLocation sourceLocation,
                                   List<Comment> comments,
-                                  IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+                                  IgnoredChars ignoredChars,
+                                  Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.name = name;
         this.operation = operation;
-        this.variableDefinitions = variableDefinitions;
-        this.directives = directives;
+        this.variableDefinitions = ImmutableList.copyOf(variableDefinitions);
+        this.directives = ImmutableList.copyOf(directives);
         this.selectionSet = selectionSet;
     }
 
     public OperationDefinition(String name,
                                Operation operation) {
-        this(name, operation, new ArrayList<>(), new ArrayList<>(), null, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, operation, emptyList(), emptyList(), null, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     public OperationDefinition(String name) {
-        this(name, null, new ArrayList<>(), new ArrayList<>(), null, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, null, emptyList(), emptyList(), null, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     @Override
@@ -92,11 +101,11 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
     }
 
     public List<VariableDefinition> getVariableDefinitions() {
-        return new ArrayList<>(variableDefinitions);
+        return variableDefinitions;
     }
 
     public List<Directive> getDirectives() {
-        return new ArrayList<>(directives);
+        return directives;
     }
 
     @Override
@@ -115,7 +124,7 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
 
         OperationDefinition that = (OperationDefinition) o;
 
-        return NodeUtil.isEqualTo(this.name, that.name) && operation == that.operation;
+        return Objects.equals(this.name, that.name) && operation == that.operation;
 
     }
 
@@ -128,8 +137,8 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
                 deepCopy(selectionSet),
                 getSourceLocation(),
                 getComments(),
-                getIgnoredChars()
-        );
+                getIgnoredChars(),
+                getAdditionalData());
     }
 
     @Override
@@ -158,28 +167,30 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
         return builder.build();
     }
 
-    public static final class Builder implements NodeBuilder {
+    public static final class Builder implements NodeDirectivesBuilder {
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private String name;
         private Operation operation;
-        private List<VariableDefinition> variableDefinitions = new ArrayList<>();
-        private List<Directive> directives = new ArrayList<>();
+        private ImmutableList<VariableDefinition> variableDefinitions = emptyList();
+        private ImmutableList<Directive> directives = emptyList();
         private SelectionSet selectionSet;
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(OperationDefinition existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
             this.operation = existing.getOperation();
-            this.variableDefinitions = existing.getVariableDefinitions();
-            this.directives = existing.getDirectives();
+            this.variableDefinitions = ImmutableList.copyOf(existing.getVariableDefinitions());
+            this.directives = ImmutableList.copyOf(existing.getDirectives());
             this.selectionSet = existing.getSelectionSet();
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -189,7 +200,7 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -204,15 +215,25 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
         }
 
         public Builder variableDefinitions(List<VariableDefinition> variableDefinitions) {
-            this.variableDefinitions = variableDefinitions;
+            this.variableDefinitions = ImmutableList.copyOf(variableDefinitions);
             return this;
         }
 
+        public Builder variableDefinition(VariableDefinition variableDefinition) {
+            this.variableDefinitions = ImmutableKit.addToList(variableDefinitions, variableDefinition);
+            return this;
+        }
+
+        @Override
         public Builder directives(List<Directive> directives) {
-            this.directives = directives;
+            this.directives = ImmutableList.copyOf(directives);
             return this;
         }
 
+        public Builder directive(Directive directive) {
+            this.directives = ImmutableKit.addToList(directives, directive);
+            return this;
+        }
         public Builder selectionSet(SelectionSet selectionSet) {
             this.selectionSet = selectionSet;
             return this;
@@ -223,8 +244,18 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
         public OperationDefinition build() {
-            OperationDefinition operationDefinition = new OperationDefinition(
+            return new OperationDefinition(
                     name,
                     operation,
                     variableDefinitions,
@@ -232,9 +263,8 @@ public class OperationDefinition extends AbstractNode<OperationDefinition> imple
                     selectionSet,
                     sourceLocation,
                     comments,
-                    ignoredChars
-            );
-            return operationDefinition;
+                    ignoredChars,
+                    additionalData);
         }
     }
 }

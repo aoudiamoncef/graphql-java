@@ -1,15 +1,20 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 import static graphql.language.NodeUtil.assertNewChildrenAreEmpty;
 
@@ -19,8 +24,8 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
     private final boolean value;
 
     @Internal
-    protected BooleanValue(boolean value, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected BooleanValue(boolean value, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.value = value;
     }
 
@@ -30,7 +35,7 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
      * @param value of the Boolean
      */
     public BooleanValue(boolean value) {
-        this(value, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(value, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     public boolean isValue() {
@@ -39,7 +44,7 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
 
     @Override
     public List<Node> getChildren() {
-        return new ArrayList<>();
+        return emptyList();
     }
 
     @Override
@@ -70,7 +75,7 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
 
     @Override
     public BooleanValue deepCopy() {
-        return new BooleanValue(value, getSourceLocation(), getComments(), getIgnoredChars());
+        return new BooleanValue(value, getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -83,6 +88,10 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
     @Override
     public TraversalControl accept(TraverserContext<Node> context, NodeVisitor visitor) {
         return visitor.visitBooleanValue(this, context);
+    }
+
+    public static BooleanValue of(boolean value) {
+        return BooleanValue.newBooleanValue(value).build();
     }
 
     public static Builder newBooleanValue() {
@@ -103,17 +112,19 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
         private boolean value;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(BooleanValue existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.value = existing.isValue();
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -128,7 +139,7 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -137,9 +148,19 @@ public class BooleanValue extends AbstractNode<BooleanValue> implements ScalarVa
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
+
         public BooleanValue build() {
-            BooleanValue booleanValue = new BooleanValue(value, sourceLocation, comments, ignoredChars);
-            return booleanValue;
+            return new BooleanValue(value, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

@@ -1,5 +1,6 @@
 package graphql.execution;
 
+import com.google.common.collect.ImmutableList;
 import graphql.GraphQLError;
 import graphql.Internal;
 import graphql.PublicApi;
@@ -7,9 +8,9 @@ import graphql.schema.DataFetcher;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static graphql.Assert.assertNotNull;
-import static java.util.Collections.unmodifiableList;
 
 
 /**
@@ -29,7 +30,6 @@ public class DataFetcherResult<T> {
     private final T data;
     private final List<GraphQLError> errors;
     private final Object localContext;
-    private final boolean mapRelativeErrors;
 
     /**
      * Creates a data fetcher result
@@ -42,14 +42,13 @@ public class DataFetcherResult<T> {
     @Internal
     @Deprecated
     public DataFetcherResult(T data, List<GraphQLError> errors) {
-        this(data, errors, null, false);
+        this(data, errors, null);
     }
 
-    private DataFetcherResult(T data, List<GraphQLError> errors, Object localContext, boolean mapRelativeErrors) {
+    private DataFetcherResult(T data, List<GraphQLError> errors, Object localContext) {
         this.data = data;
-        this.errors = unmodifiableList(assertNotNull(errors));
+        this.errors = ImmutableList.copyOf(assertNotNull(errors));
         this.localContext = localContext;
-        this.mapRelativeErrors = mapRelativeErrors;
     }
 
     /**
@@ -83,17 +82,17 @@ public class DataFetcherResult<T> {
     }
 
     /**
-     * When this returns true, the data fetching code will map this error as being a relative error from the existing field.
-     * <p>
-     * This is useful when you are calling a down stream graphql system and you want to make the errors appear to be from a point
-     * relative to the currently executing field.
-     * <p>
-     * By default this behavior is off
+     * This helps you transform the current DataFetcherResult into another one by starting a builder with all
+     * the current values and allows you to transform it how you want.
      *
-     * @return true if relative error mapping should occur.
+     * @param builderConsumer the consumer code that will be given a builder to transform
+     *
+     * @return a new instance produced by calling {@code build} on that builder
      */
-    public boolean isMapRelativeErrors() {
-        return mapRelativeErrors;
+    public DataFetcherResult<T> transform(Consumer<Builder<T>> builderConsumer) {
+        Builder<T> builder = new Builder<>(this);
+        builderConsumer.accept(builder);
+        return builder.build();
     }
 
     /**
@@ -111,7 +110,12 @@ public class DataFetcherResult<T> {
         private T data;
         private Object localContext;
         private final List<GraphQLError> errors = new ArrayList<>();
-        private boolean mapRelativeErrors = false;
+
+        public Builder(DataFetcherResult<T> existing) {
+            data = existing.getData();
+            localContext = existing.getLocalContext();
+            errors.addAll(existing.getErrors());
+        }
 
         public Builder(T data) {
             this.data = data;
@@ -135,11 +139,6 @@ public class DataFetcherResult<T> {
             return this;
         }
 
-        public Builder<T> mapRelativeErrors(boolean mapRelativeErrors) {
-            this.mapRelativeErrors = mapRelativeErrors;
-            return this;
-        }
-
         /**
          * @return true if there are any errors present
          */
@@ -153,7 +152,7 @@ public class DataFetcherResult<T> {
         }
 
         public DataFetcherResult<T> build() {
-            return new DataFetcherResult<>(data, errors, localContext, mapRelativeErrors);
+            return new DataFetcherResult<>(data, errors, localContext);
         }
     }
 }

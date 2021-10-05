@@ -1,15 +1,18 @@
 package graphql.execution.instrumentation.dataloader
 
+import graphql.ExecutionInput
 import graphql.ExecutionResult
 import graphql.GraphQL
+import graphql.TestUtil
 import graphql.execution.AsyncExecutionStrategy
 import graphql.execution.AsyncSerialExecutionStrategy
 import graphql.execution.ExecutionContext
 import graphql.execution.ExecutionStrategyParameters
-import graphql.execution.ExecutorServiceExecutionStrategy
-import graphql.execution.batched.BatchedExecutionStrategy
 import graphql.execution.instrumentation.ChainedInstrumentation
 import graphql.execution.instrumentation.Instrumentation
+import graphql.execution.instrumentation.SimpleInstrumentation
+import graphql.execution.instrumentation.parameters.InstrumentationExecutionParameters
+import graphql.schema.DataFetcher
 import org.dataloader.BatchLoader
 import org.dataloader.DataLoader
 import org.dataloader.DataLoaderRegistry
@@ -18,10 +21,11 @@ import spock.lang.Unroll
 
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
-import java.util.concurrent.ForkJoinPool
 
 import static graphql.ExecutionInput.newExecutionInput
 import static graphql.StarWarsSchema.starWarsSchema
+import static graphql.schema.idl.RuntimeWiring.newRuntimeWiring
+import static graphql.schema.idl.TypeRuntimeWiring.newTypeWiring
 
 class DataLoaderDispatcherInstrumentationTest extends Specification {
 
@@ -36,10 +40,36 @@ class DataLoaderDispatcherInstrumentationTest extends Specification {
     }
 
 
+    def query = """
+        query {
+            hero {
+                name 
+                friends {
+                    name
+                    friends {
+                       name
+                    } 
+                }
+            }
+        }
+        """
+
+    def expectedQueryData = [hero: [name: 'R2-D2', friends: [
+            [name: 'Luke Skywalker', friends: [
+                    [name: 'Han Solo'], [name: 'Leia Organa'], [name: 'C-3PO'], [name: 'R2-D2']]],
+            [name: 'Han Solo', friends: [
+                    [name: 'Luke Skywalker'], [name: 'Leia Organa'], [name: 'R2-D2']]],
+            [name: 'Leia Organa', friends: [
+                    [name: 'Luke Skywalker'], [name: 'Han Solo'], [name: 'C-3PO'], [name: 'R2-D2']]]]]
+    ]
+
+
     def "dataloader instrumentation is always added and an empty data loader registry is in place"() {
 
         def captureStrategy = new CaptureStrategy()
-        def graphQL = GraphQL.newGraphQL(starWarsSchema).queryExecutionStrategy(captureStrategy).build()
+        def graphQL = GraphQL.newGraphQL(starWarsSchema).queryExecutionStrategy(captureStrategy)
+                .instrumentation(new SimpleInstrumentation())
+                .build()
         def executionInput = newExecutionInput().query('{ hero { name } }').build()
         when:
         graphQL.execute(executionInput)
@@ -49,7 +79,7 @@ class DataLoaderDispatcherInstrumentationTest extends Specification {
         chainedInstrumentation.instrumentations.any { instr -> instr instanceof DataLoaderDispatcherInstrumentation }
     }
 
-    def "dispatch is never called if there are no data loaders"() {
+    def "dispatch is never called if not data loader registry is set in"() {
         def dataLoaderRegistry = new DataLoaderRegistry() {
             @Override
             void dispatchAll() {
@@ -57,7 +87,7 @@ class DataLoaderDispatcherInstrumentationTest extends Specification {
             }
         }
         def graphQL = GraphQL.newGraphQL(starWarsSchema).build()
-        def executionInput = newExecutionInput().dataLoaderRegistry(dataLoaderRegistry).query('{ hero { name } }').build()
+        def executionInput = newExecutionInput().query('{ hero { name } }').build()
 
         when:
         def er = graphQL.execute(executionInput)
@@ -92,19 +122,38 @@ class DataLoaderDispatcherInstrumentationTest extends Specification {
         dispatchedCalled
     }
 
-    def query = """
-        query {
-            hero {
-                name 
-                friends {
-                    name
-                    friends {
-                       name
-                    } 
-                }
+    def "enhanced execution input is respected"() {
+
+        def starWarsWiring = new StarWarsDataLoaderWiring()
+
+
+        DataLoaderRegistry startingDataLoaderRegistry = new DataLoaderRegistry();
+        def enhancedDataLoaderRegistry = starWarsWiring.newDataLoaderRegistry()
+
+        def dlInstrumentation = new DataLoaderDispatcherInstrumentation()
+        def enhancingInstrumentation = new SimpleInstrumentation() {
+            @Override
+            ExecutionInput instrumentExecutionInput(ExecutionInput executionInput, InstrumentationExecutionParameters parameters) {
+                assert executionInput.getDataLoaderRegistry() == startingDataLoaderRegistry
+                return executionInput.transform({ builder -> builder.dataLoaderRegistry(enhancedDataLoaderRegistry) })
             }
         }
-        """
+
+        def chainedInstrumentation = new ChainedInstrumentation([dlInstrumentation, enhancingInstrumentation])
+
+        def graphql = GraphQL.newGraphQL(starWarsWiring.schema)
+                .instrumentation(chainedInstrumentation).build()
+
+        def executionInput = newExecutionInput()
+                .dataLoaderRegistry(startingDataLoaderRegistry)
+                .query(query).build()
+
+        when:
+        def er = graphql.executeAsync(executionInput).join()
+        then:
+        er.data == expectedQueryData
+    }
+
 
     @Unroll
     def "ensure DataLoaderDispatcherInstrumentation works for #executionStrategyName"() {
@@ -126,21 +175,12 @@ class DataLoaderDispatcherInstrumentationTest extends Specification {
         def er = asyncResult.join()
 
         then:
-        er.data == [hero: [name: 'R2-D2', friends: [
-                [name: 'Luke Skywalker', friends: [
-                        [name: 'Han Solo'], [name: 'Leia Organa'], [name: 'C-3PO'], [name: 'R2-D2']]],
-                [name: 'Han Solo', friends: [
-                        [name: 'Luke Skywalker'], [name: 'Leia Organa'], [name: 'R2-D2']]],
-                [name: 'Leia Organa', friends: [
-                        [name: 'Luke Skywalker'], [name: 'Han Solo'], [name: 'C-3PO'], [name: 'R2-D2']]]]]
-        ]
+        er.data == expectedQueryData
 
         where:
-        executionStrategyName              | executionStrategy                                               || _
-        "AsyncExecutionStrategy"           | new AsyncSerialExecutionStrategy()                              || _
-        "AsyncSerialExecutionStrategy"     | new AsyncSerialExecutionStrategy()                              || _
-        "BatchedExecutionStrategy"         | new BatchedExecutionStrategy()                                  || _
-        "ExecutorServiceExecutionStrategy" | new ExecutorServiceExecutionStrategy(ForkJoinPool.commonPool()) || _
+        executionStrategyName          | executionStrategy                  || _
+        "AsyncExecutionStrategy"       | new AsyncSerialExecutionStrategy() || _
+        "AsyncSerialExecutionStrategy" | new AsyncSerialExecutionStrategy() || _
     }
 
     def "basic batch loading is possible via instrumentation interception of Execution Strategies"() {
@@ -221,5 +261,37 @@ class DataLoaderDispatcherInstrumentationTest extends Specification {
         starWarsWiring.rawCharacterLoadCount == 4
         starWarsWiring.batchFunctionLoadCount == 2
         starWarsWiring.naiveLoadCount == 8
+    }
+
+    def "can be efficient with lazily computed data loaders"() {
+
+        def sdl = '''
+            type Query {
+                field : String
+            }
+        '''
+
+        BatchLoader batchLoader = { keys -> CompletableFuture.completedFuture(keys) }
+
+        DataFetcher df = { env ->
+            def dataLoader = env.getDataLoaderRegistry().computeIfAbsent("key", { key -> DataLoader.newDataLoader(batchLoader) })
+
+            return dataLoader.load("working as expected")
+        }
+        def runtimeWiring = newRuntimeWiring().type(
+                newTypeWiring("Query").dataFetcher("field", df).build()
+        ).build()
+
+        def graphql = TestUtil.graphQL(sdl, runtimeWiring).build()
+
+        DataLoaderRegistry dataLoaderRegistry = new DataLoaderRegistry()
+
+        when:
+        def executionInput = newExecutionInput().dataLoaderRegistry(dataLoaderRegistry).query('{ field }').build()
+        def er = graphql.execute(executionInput)
+
+        then:
+        er.errors.isEmpty()
+        er.data["field"] == "working as expected"
     }
 }

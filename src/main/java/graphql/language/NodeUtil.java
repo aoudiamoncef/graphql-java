@@ -1,5 +1,6 @@
 package graphql.language;
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.execution.UnknownOperationException;
 import graphql.util.FpKit;
@@ -8,6 +9,7 @@ import graphql.util.NodeLocation;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static graphql.util.FpKit.mergeFirst;
 
@@ -17,24 +19,21 @@ import static graphql.util.FpKit.mergeFirst;
 @Internal
 public class NodeUtil {
 
-    public static boolean isEqualTo(String thisStr, String thatStr) {
-        if (null == thisStr) {
-            if (null != thatStr) {
-                return false;
+    public static <T extends NamedNode<T>> T findNodeByName(List<T> namedNodes, String name) {
+        for (T namedNode : namedNodes) {
+            if (Objects.equals(namedNode.getName(), name)) {
+                return namedNode;
             }
-        } else if (!thisStr.equals(thatStr)) {
-            return false;
         }
-        return true;
+        return null;
     }
 
-
-    public static Map<String, Directive> directivesByName(List<Directive> directives) {
-        return FpKit.getByName(directives, Directive::getName, mergeFirst());
+    public static Map<String, ImmutableList<Directive>> allDirectivesByName(List<Directive> directives) {
+        return FpKit.groupingBy(directives, Directive::getName);
     }
 
-    public static Map<String, Argument> argumentsByName(List<Argument> arguments) {
-        return FpKit.getByName(arguments, Argument::getName, mergeFirst());
+    public static <T extends NamedNode<T>> Map<String, T> nodeByName(List<T> nameNode) {
+        return FpKit.getByName(nameNode, NamedNode::getName, mergeFirst());
     }
 
 

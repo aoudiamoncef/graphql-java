@@ -1,22 +1,29 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
+import static graphql.collect.ImmutableKit.nonNullCopyOf;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
-public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> implements DirectivesContainer<EnumValueDefinition> {
+public class EnumValueDefinition extends AbstractDescribedNode<EnumValueDefinition> implements DirectivesContainer<EnumValueDefinition>, NamedNode<EnumValueDefinition> {
     private final String name;
-    private final Description description;
-    private final List<Directive> directives;
+    private final ImmutableList<Directive> directives;
 
     public static final String CHILD_DIRECTIVES = "directives";
 
@@ -26,11 +33,10 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
                                   Description description,
                                   SourceLocation sourceLocation,
                                   List<Comment> comments,
-                                  IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+                                  IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData, description);
         this.name = name;
-        this.description = description;
-        this.directives = (null == directives) ? new ArrayList<>() : directives;
+        this.directives = nonNullCopyOf(directives);
     }
 
     /**
@@ -39,7 +45,7 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
      * @param name of the enum value
      */
     public EnumValueDefinition(String name) {
-        this(name, new ArrayList<>(), null, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, emptyList(), null, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     /**
@@ -49,7 +55,7 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
      * @param directives the directives on the enum value
      */
     public EnumValueDefinition(String name, List<Directive> directives) {
-        this(name, directives, null, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, directives, null, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     @Override
@@ -57,20 +63,14 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
         return name;
     }
 
-    public Description getDescription() {
-        return description;
-    }
-
     @Override
     public List<Directive> getDirectives() {
-        return new ArrayList<>(directives);
+        return directives;
     }
 
     @Override
     public List<Node> getChildren() {
-        List<Node> result = new ArrayList<>();
-        result.addAll(directives);
-        return result;
+        return ImmutableList.copyOf(directives);
     }
 
     @Override
@@ -98,13 +98,13 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
 
         EnumValueDefinition that = (EnumValueDefinition) o;
 
-        return NodeUtil.isEqualTo(this.name, that.name);
+        return Objects.equals(this.name, that.name);
 
     }
 
     @Override
     public EnumValueDefinition deepCopy() {
-        return new EnumValueDefinition(name, deepCopy(directives), description, getSourceLocation(), getComments(), getIgnoredChars());
+        return new EnumValueDefinition(name, deepCopy(directives), description, getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -132,22 +132,24 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
 
     public static final class Builder implements NodeDirectivesBuilder {
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private String name;
         private Description description;
-        private List<Directive> directives;
+        private ImmutableList<Directive> directives = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(EnumValueDefinition existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
             this.description = existing.getDescription();
-            this.directives = existing.getDirectives();
+            this.directives = ImmutableList.copyOf(existing.getDirectives());
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
         public Builder sourceLocation(SourceLocation sourceLocation) {
@@ -156,7 +158,7 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -170,8 +172,14 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
             return this;
         }
 
+        @Override
         public Builder directives(List<Directive> directives) {
-            this.directives = directives;
+            this.directives = ImmutableList.copyOf(directives);
+            return this;
+        }
+
+        public Builder directive(Directive directive) {
+            this.directives = ImmutableKit.addToList(directives, directive);
             return this;
         }
 
@@ -180,9 +188,19 @@ public class EnumValueDefinition extends AbstractNode<EnumValueDefinition> imple
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
+
         public EnumValueDefinition build() {
-            EnumValueDefinition enumValueDefinition = new EnumValueDefinition(name, directives, description, sourceLocation, comments, ignoredChars);
-            return enumValueDefinition;
+            return new EnumValueDefinition(name, directives, description, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

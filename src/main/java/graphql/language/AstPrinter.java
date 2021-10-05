@@ -4,17 +4,15 @@ import graphql.AssertException;
 import graphql.PublicApi;
 
 import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.io.Writer;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static graphql.Assert.assertTrue;
+import static graphql.util.EscapeUtil.escapeJsonString;
 import static java.lang.String.valueOf;
-import static java.util.stream.Collectors.joining;
 
 /**
  * This can take graphql language AST and print it out as a string
@@ -22,7 +20,6 @@ import static java.util.stream.Collectors.joining;
 @SuppressWarnings("UnnecessaryLocalVariable")
 @PublicApi
 public class AstPrinter {
-
     private final Map<Class<? extends Node>, NodePrinter<? extends Node>> printers = new LinkedHashMap<>();
 
     private final boolean compactMode;
@@ -64,6 +61,7 @@ public class AstPrinter {
         printers.put(ScalarTypeDefinition.class, scalarTypeDefinition());
         printers.put(ScalarTypeExtensionDefinition.class, scalarTypeExtensionDefinition());
         printers.put(SchemaDefinition.class, schemaDefinition());
+        printers.put(SchemaExtensionDefinition.class, schemaExtensionDefinition());
         printers.put(SelectionSet.class, selectionSet());
         printers.put(StringValue.class, value());
         printers.put(TypeName.class, type());
@@ -75,64 +73,70 @@ public class AstPrinter {
 
     private NodePrinter<Argument> argument() {
         if (compactMode) {
-            return (out, node) -> out.printf("%s:%s", node.getName(), value(node.getValue()));
+            return (out, node) -> out.append(node.getName()).append(':').append(value(node.getValue()));
         }
-        return (out, node) -> out.printf("%s: %s", node.getName(), value(node.getValue()));
+        return (out, node) -> out.append(node.getName()).append(": ").append(value(node.getValue()));
     }
 
     private NodePrinter<Document> document() {
         if (compactMode) {
-            return (out, node) -> out.printf("%s", join(node.getDefinitions(), " "));
+            return (out, node) -> out.append(join(node.getDefinitions(), " "));
         }
-        return (out, node) -> out.printf("%s\n", join(node.getDefinitions(), "\n\n"));
+        return (out, node) -> out.append(join(node.getDefinitions(), "\n\n")).append("\n");
     }
 
     private NodePrinter<Directive> directive() {
         final String argSep = compactMode ? "," : ", ";
         return (out, node) -> {
             String arguments = wrap("(", join(node.getArguments(), argSep), ")");
-            out.printf("@%s%s", node.getName(), arguments);
+            out.append('@').append(node.getName()).append(arguments);
         };
     }
 
     private NodePrinter<DirectiveDefinition> directiveDefinition() {
         final String argSep = compactMode ? "," : ", ";
         return (out, node) -> {
+            out.append(description(node));
             String arguments = wrap("(", join(node.getInputValueDefinitions(), argSep), ")");
             String locations = join(node.getDirectiveLocations(), " | ");
-            out.printf("directive @%s%s on %s", node.getName(), arguments, locations);
+            String repeatable = node.isRepeatable() ? "repeatable " : "";
+            out.append("directive @")
+                    .append(node.getName())
+                    .append(arguments)
+                    .append(" ")
+                    .append(repeatable)
+                    .append("on ")
+                    .append(locations);
         };
     }
 
     private NodePrinter<DirectiveLocation> directiveLocation() {
-        return (out, node) -> out.print(node.getName());
+        return (out, node) -> out.append(node.getName());
     }
 
     private NodePrinter<EnumTypeDefinition> enumTypeDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s",
-                    spaced(
-                            "enum",
-                            node.getName(),
-                            directives(node.getDirectives()),
-                            block(node.getEnumValueDefinitions())
-                    ));
+            out.append(description(node));
+            out.append(spaced(
+                    "enum",
+                    node.getName(),
+                    directives(node.getDirectives()),
+                    block(node.getEnumValueDefinitions())
+            ));
         };
     }
 
     private NodePrinter<EnumValue> enumValue() {
-        return (out, node) -> out.printf("%s", node.getName());
+        return (out, node) -> out.append(node.getName());
     }
 
     private NodePrinter<EnumValueDefinition> enumValueDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s",
-                    spaced(
-                            node.getName(),
-                            directives(node.getDirectives())
-                    ));
+            out.append(description(node));
+            out.append(spaced(
+                    node.getName(),
+                    directives(node.getDirectives())
+            ));
         };
     }
 
@@ -146,7 +150,7 @@ public class AstPrinter {
             String directives = directives(node.getDirectives());
             String selectionSet = node(node.getSelectionSet());
 
-            out.printf("%s", spaced(
+            out.append(spaced(
                     alias + name + arguments,
                     directives,
                     selectionSet
@@ -158,34 +162,41 @@ public class AstPrinter {
     private NodePrinter<FieldDefinition> fieldDefinition() {
         final String argSep = compactMode ? "," : ", ";
         return (out, node) -> {
-            out.printf("%s", comments(node));
             String args;
-            if (hasComments(node.getInputValueDefinitions()) && !compactMode) {
+            if (hasDescription(node.getInputValueDefinitions()) && !compactMode) {
+                out.append(description(node));
                 args = join(node.getInputValueDefinitions(), "\n");
-                out.printf("%s", node.getName() +
-                        wrap("(\n", args, "\n)") +
-                        ": " +
-                        spaced(
+                out.append(node.getName())
+                        .append(wrap("(\n", args, ")"))
+                        .append(": ")
+                        .append(spaced(
                                 type(node.getType()),
                                 directives(node.getDirectives())
-                        )
-                );
+                        ));
             } else {
                 args = join(node.getInputValueDefinitions(), argSep);
-                out.printf("%s", node.getName() +
-                        wrap("(", args, ")") +
-                        ": " +
-                        spaced(
+                out.append(node.getName())
+                        .append(wrap("(", args, ")"))
+                        .append(": ")
+                        .append(spaced(
                                 type(node.getType()),
                                 directives(node.getDirectives())
-                        )
-                );
+                        ));
             }
         };
     }
 
-    private boolean hasComments(List<? extends Node> nodes) {
-        return nodes.stream().anyMatch(it -> it.getComments().size() > 0);
+    private boolean hasDescription(List<? extends Node> nodes) {
+        for (Node node : nodes) {
+            if (node instanceof AbstractDescribedNode) {
+                AbstractDescribedNode<?> describedNode = (AbstractDescribedNode<?>) node;
+                if (describedNode.getDescription() != null) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private NodePrinter<FragmentDefinition> fragmentDefinition() {
@@ -195,8 +206,10 @@ public class AstPrinter {
             String directives = directives(node.getDirectives());
             String selectionSet = node(node.getSelectionSet());
 
-            out.printf("fragment %s on %s ", name, typeCondition);
-            out.printf("%s", directives + selectionSet);
+            out.append("fragment ").append(name).append(" on ").append(typeCondition)
+                    .append(' ')
+                    .append(directives)
+                    .append(selectionSet);
         };
     }
 
@@ -205,7 +218,7 @@ public class AstPrinter {
             String name = node.getName();
             String directives = directives(node.getDirectives());
 
-            out.printf("...%s%s", name, directives);
+            out.append("...").append(name).append(directives);
         };
     }
 
@@ -217,8 +230,7 @@ public class AstPrinter {
             String directives = directives(node.getDirectives());
             String selectionSet = node(node.getSelectionSet());
 
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(spaced(
                     "...",
                     typeCondition,
                     directives,
@@ -229,14 +241,13 @@ public class AstPrinter {
 
     private NodePrinter<InputObjectTypeDefinition> inputObjectTypeDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     "input",
                     node.getName(),
                     directives(node.getDirectives()),
                     block(node.getInputValueDefinitions())
-                    )
-            );
+            ));
         };
     }
 
@@ -245,34 +256,32 @@ public class AstPrinter {
         String defaultValueEquals = compactMode ? "=" : "= ";
         return (out, node) -> {
             Value defaultValue = node.getDefaultValue();
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     node.getName() + nameTypeSep + type(node.getType()),
                     wrap(defaultValueEquals, defaultValue, ""),
                     directives(node.getDirectives())
-                    )
-            );
+            ));
         };
     }
 
     private NodePrinter<InterfaceTypeDefinition> interfaceTypeDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     "interface",
                     node.getName(),
+                    wrap("implements ", join(node.getImplements(), " & "), ""),
                     directives(node.getDirectives()),
                     block(node.getFieldDefinitions())
-                    )
-            );
+            ));
         };
     }
 
     private NodePrinter<ObjectField> objectField() {
         String nameValueSep = compactMode ? ":" : " : ";
-        return (out, node) -> out.printf("%s%s%s", node.getName(), nameValueSep, value(node.getValue()));
+        return (out, node) -> out.append(node.getName()).append(nameValueSep).append(value(node.getValue()));
     }
-
 
     private NodePrinter<OperationDefinition> operationDefinition() {
         final String argSep = compactMode ? "," : ", ";
@@ -286,22 +295,22 @@ public class AstPrinter {
             // Anonymous queries with no directives or variable definitions can use
             // the query short form.
             if (isEmpty(name) && isEmpty(directives) && isEmpty(varDefinitions) && op.equals("QUERY")) {
-                out.printf("%s", selectionSet);
+                out.append(selectionSet);
             } else {
-                out.printf("%s", spaced(op, smooshed(name, varDefinitions), directives, selectionSet));
+                out.append(spaced(op, smooshed(name, varDefinitions), directives, selectionSet));
             }
         };
     }
 
     private NodePrinter<OperationTypeDefinition> operationTypeDefinition() {
         String nameTypeSep = compactMode ? ":" : ": ";
-        return (out, node) -> out.printf("%s%s%s", node.getName(), nameTypeSep, type(node.getTypeName()));
+        return (out, node) -> out.append(node.getName()).append(nameTypeSep).append(type(node.getTypeName()));
     }
 
     private NodePrinter<ObjectTypeDefinition> objectTypeDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     "type",
                     node.getName(),
                     wrap("implements ", join(node.getImplements(), " & "), ""),
@@ -313,15 +322,14 @@ public class AstPrinter {
 
     private NodePrinter<SelectionSet> selectionSet() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", block(node.getSelections()));
+            out.append(block(node.getSelections()));
         };
     }
 
     private NodePrinter<ScalarTypeDefinition> scalarTypeDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     "scalar",
                     node.getName(),
                     directives(node.getDirectives())));
@@ -331,19 +339,18 @@ public class AstPrinter {
 
     private NodePrinter<SchemaDefinition> schemaDefinition() {
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     "schema",
                     directives(node.getDirectives()),
                     block(node.getOperationTypeDefinitions())
-
             ));
         };
     }
 
 
     private NodePrinter<Type> type() {
-        return (out, node) -> out.print(type(node));
+        return (out, node) -> out.append(type(node));
     }
 
     private String type(Type type) {
@@ -360,35 +367,39 @@ public class AstPrinter {
     }
 
     private NodePrinter<ObjectTypeExtensionDefinition> objectTypeExtensionDefinition() {
-        return (out, node) -> out.printf("extend %s", node(node, ObjectTypeDefinition.class));
+        return (out, node) -> out.append("extend ").append(node(node, ObjectTypeDefinition.class));
     }
 
     private NodePrinter<EnumTypeExtensionDefinition> enumTypeExtensionDefinition() {
-        return (out, node) -> out.printf("extend %s", node(node, EnumTypeDefinition.class));
+        return (out, node) -> out.append("extend ").append(node(node, EnumTypeDefinition.class));
     }
 
     private NodePrinter<InterfaceTypeDefinition> interfaceTypeExtensionDefinition() {
-        return (out, node) -> out.printf("extend %s", node(node, InterfaceTypeDefinition.class));
+        return (out, node) -> out.append("extend ").append(node(node, InterfaceTypeDefinition.class));
     }
 
     private NodePrinter<UnionTypeExtensionDefinition> unionTypeExtensionDefinition() {
-        return (out, node) -> out.printf("extend %s", node(node, UnionTypeDefinition.class));
+        return (out, node) -> out.append("extend ").append(node(node, UnionTypeDefinition.class));
     }
 
     private NodePrinter<ScalarTypeExtensionDefinition> scalarTypeExtensionDefinition() {
-        return (out, node) -> out.printf("extend %s", node(node, ScalarTypeDefinition.class));
+        return (out, node) -> out.append("extend ").append(node(node, ScalarTypeDefinition.class));
     }
 
     private NodePrinter<InputObjectTypeExtensionDefinition> inputObjectTypeExtensionDefinition() {
-        return (out, node) -> out.printf("extend %s", node(node, InputObjectTypeDefinition.class));
+        return (out, node) -> out.append("extend ").append(node(node, InputObjectTypeDefinition.class));
+    }
+
+    private NodePrinter<SchemaExtensionDefinition> schemaExtensionDefinition() {
+        return (out, node) -> out.append("extend ").append(node(node, SchemaDefinition.class));
     }
 
     private NodePrinter<UnionTypeDefinition> unionTypeDefinition() {
         String barSep = compactMode ? "|" : " | ";
         String equals = compactMode ? "=" : "= ";
         return (out, node) -> {
-            out.printf("%s", comments(node));
-            out.printf("%s", spaced(
+            out.append(description(node));
+            out.append(spaced(
                     "union",
                     node.getName(),
                     directives(node.getDirectives()),
@@ -400,16 +411,16 @@ public class AstPrinter {
     private NodePrinter<VariableDefinition> variableDefinition() {
         String nameTypeSep = compactMode ? ":" : ": ";
         String defaultValueEquals = compactMode ? "=" : " = ";
-        return (out, node) -> out.printf("$%s%s%s%s",
-                node.getName(),
-                nameTypeSep,
-                type(node.getType()),
-                wrap(defaultValueEquals, node.getDefaultValue(), "")
-        );
+        return (out, node) -> out.append('$')
+                .append(node.getName())
+                .append(nameTypeSep)
+                .append(type(node.getType()))
+                .append(wrap(defaultValueEquals, node.getDefaultValue(), ""))
+                .append(directives(node.getDirectives()));
     }
 
     private NodePrinter<VariableReference> variableReference() {
-        return (out, node) -> out.printf("$%s", node.getName());
+        return (out, node) -> out.append('$').append(node.getName());
     }
 
     private String node(Node node) {
@@ -418,13 +429,12 @@ public class AstPrinter {
 
     private String node(Node node, Class startClass) {
         if (startClass != null) {
-            assertTrue(startClass.isInstance(node), "The starting class must be in the inherit tree");
+            assertTrue(startClass.isInstance(node), () -> "The starting class must be in the inherit tree");
         }
-        StringWriter sw = new StringWriter();
-        PrintWriter out = new PrintWriter(sw);
+        StringBuilder builder = new StringBuilder();
         NodePrinter<Node> printer = _findPrinter(node, startClass);
-        printer.print(out, node);
-        return sw.toString();
+        printer.print(builder, node);
+        return builder.toString();
     }
 
     @SuppressWarnings("unchecked")
@@ -462,7 +472,7 @@ public class AstPrinter {
     }
 
     private NodePrinter<Value> value() {
-        return (out, node) -> out.print(value(node));
+        return (out, node) -> out.append(value(node));
     }
 
     private String value(Value value) {
@@ -472,7 +482,7 @@ public class AstPrinter {
         } else if (value instanceof FloatValue) {
             return valueOf(((FloatValue) value).getValue());
         } else if (value instanceof StringValue) {
-            return wrap("\"", valueOf(((StringValue) value).getValue()), "\"");
+            return wrap("\"", escapeJsonString(((StringValue) value).getValue()), "\"");
         } else if (value instanceof EnumValue) {
             return valueOf(((EnumValue) value).getName());
         } else if (value instanceof BooleanValue) {
@@ -489,15 +499,20 @@ public class AstPrinter {
         return "";
     }
 
-    private String comments(Node<?> node) {
-        List<Comment> comments = nvl(node.getComments());
-        if (isEmpty(comments) || compactMode) {
+    private String description(Node<?> node) {
+        Description description = ((AbstractDescribedNode) node).getDescription();
+        if (description == null || description.getContent() == null || compactMode) {
             return "";
         }
-        String s = comments.stream().map(c -> "#" + c.getContent()).collect(joining("\n", "", "\n"));
+        String s;
+        boolean startNewLine = description.getContent().length() > 0 && description.getContent().charAt(0) == '\n';
+        if (description.isMultiLine()) {
+            s = "\"\"\"" + (startNewLine ? "" : "\n") + description.getContent() + "\n\"\"\"\n";
+        } else {
+            s = "\"" + description.getContent() + "\"\n";
+        }
         return s;
     }
-
 
     private String directives(List<Directive> directives) {
         return join(nvl(directives), " ");
@@ -509,8 +524,21 @@ public class AstPrinter {
 
     @SuppressWarnings("SameParameterValue")
     private <T extends Node> String join(List<T> nodes, String delim, String prefix, String suffix) {
-        String s = nvl(nodes).stream().map(this::node).collect(joining(delim, prefix, suffix));
-        return s;
+        StringBuilder joined = new StringBuilder();
+        joined.append(prefix);
+
+        boolean first = true;
+        for (T node : nodes) {
+            if (first) {
+                first = false;
+            } else {
+                joined.append(delim);
+            }
+            joined.append(this.node(node));
+        }
+
+        joined.append(suffix);
+        return joined.toString();
     }
 
     private String spaced(String... args) {
@@ -522,8 +550,22 @@ public class AstPrinter {
     }
 
     private String join(String delim, String... args) {
-        String s = Arrays.stream(args).filter(arg -> !isEmpty(arg)).collect(joining(delim));
-        return s;
+        StringBuilder builder = new StringBuilder();
+
+        boolean first = true;
+        for (final String arg : args) {
+            if (isEmpty(arg)) {
+                continue;
+            }
+            if (first) {
+                first = false;
+            } else {
+                builder.append(delim);
+            }
+            builder.append(arg);
+        }
+
+        return builder.toString();
     }
 
     String wrap(String start, String maybeString, String end) {
@@ -570,13 +612,12 @@ public class AstPrinter {
      * This will pretty print the AST node in graphql language format
      *
      * @param node the AST node to print
-     *
      * @return the printed node in graphql language format
      */
     public static String printAst(Node node) {
-        StringWriter sw = new StringWriter();
-        printAst(sw, node);
-        return sw.toString();
+        StringBuilder builder = new StringBuilder();
+        printImpl(builder, node, false);
+        return builder.toString();
     }
 
     /**
@@ -586,7 +627,9 @@ public class AstPrinter {
      * @param node   the AST node to print
      */
     public static void printAst(Writer writer, Node node) {
-        printImpl(writer, node, false);
+        String ast = printAst(node);
+        PrintWriter printer = new PrintWriter(writer);
+        printer.write(ast);
     }
 
     /**
@@ -594,19 +637,18 @@ public class AstPrinter {
      * and comments stripped out of the text.
      *
      * @param node the AST node to print
-     *
      * @return the printed node in a compact graphql language format
      */
     public static String printAstCompact(Node node) {
-        StringWriter sw = new StringWriter();
-        printImpl(sw, node, true);
-        return sw.toString();
+        StringBuilder builder = new StringBuilder();
+        printImpl(builder, node, true);
+        return builder.toString();
     }
 
-    private static void printImpl(Writer writer, Node node, boolean compactMode) {
+    private static void printImpl(StringBuilder writer, Node node, boolean compactMode) {
         AstPrinter astPrinter = new AstPrinter(compactMode);
         NodePrinter<Node> printer = astPrinter._findPrinter(node);
-        printer.print(new PrintWriter(writer), node);
+        printer.print(writer, node);
     }
 
     /**
@@ -615,6 +657,6 @@ public class AstPrinter {
      * @param <T> the type of node
      */
     private interface NodePrinter<T extends Node> {
-        void print(PrintWriter out, T node);
+        void print(StringBuilder out, T node);
     }
 }

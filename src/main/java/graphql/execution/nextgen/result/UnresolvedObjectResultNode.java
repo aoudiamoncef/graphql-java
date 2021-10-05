@@ -1,19 +1,15 @@
 package graphql.execution.nextgen.result;
 
-import graphql.execution.nextgen.FetchedValueAnalysis;
+import graphql.Internal;
+import graphql.execution.ExecutionStepInfo;
 
 import java.util.Collections;
 
+@Internal
 public class UnresolvedObjectResultNode extends ObjectExecutionResultNode {
 
-    public UnresolvedObjectResultNode(FetchedValueAnalysis fetchedValueAnalysis) {
-        super(fetchedValueAnalysis, Collections.emptyList());
+    public UnresolvedObjectResultNode(ExecutionStepInfo executionStepInfo, ResolvedValue resolvedValue) {
+        super(executionStepInfo, resolvedValue, Collections.emptyList(), Collections.emptyList());
     }
 
-    @Override
-    public String toString() {
-        return "UnresolvedObjectResultNode{" +
-                "fetchedValueAnalysis=" + getFetchedValueAnalysis() +
-                '}';
-    }
 }

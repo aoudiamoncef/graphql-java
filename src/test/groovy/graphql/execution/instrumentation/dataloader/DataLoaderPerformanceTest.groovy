@@ -1,36 +1,29 @@
 package graphql.execution.instrumentation.dataloader
 
+
 import graphql.ExecutionInput
-import graphql.ExecutionResult
 import graphql.GraphQL
-import graphql.execution.defer.CapturingSubscriber
 import graphql.execution.instrumentation.Instrumentation
-import org.awaitility.Awaitility
 import org.dataloader.DataLoaderRegistry
-import org.reactivestreams.Publisher
 import spock.lang.Specification
 
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getDeferredQuery
 import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpectedData
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpectedDeferredData
 import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpectedExpensiveData
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpectedExpensiveDeferredData
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpectedListOfDeferredData
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpensiveDeferredQuery
 import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getExpensiveQuery
 import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.getQuery
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.setupDataLoaderRegistry
-import static graphql.execution.instrumentation.dataloader.DataLoaderPerformanceData.setupGraphQL
 
 class DataLoaderPerformanceTest extends Specification {
 
     GraphQL graphQL
     DataLoaderRegistry dataLoaderRegistry
+    BatchCompareDataFetchers batchCompareDataFetchers
 
     void setup() {
-        dataLoaderRegistry = setupDataLoaderRegistry()
+        batchCompareDataFetchers = new BatchCompareDataFetchers()
+        DataLoaderPerformanceData dataLoaderPerformanceData = new DataLoaderPerformanceData(batchCompareDataFetchers)
+        dataLoaderRegistry = dataLoaderPerformanceData.setupDataLoaderRegistry()
         Instrumentation instrumentation = new DataLoaderDispatcherInstrumentation()
-        graphQL = setupGraphQL(instrumentation)
+        graphQL = dataLoaderPerformanceData.setupGraphQL(instrumentation)
     }
 
     def "760 ensure data loader is performant for lists"() {
@@ -42,8 +35,8 @@ class DataLoaderPerformanceTest extends Specification {
         result.data == expectedData
         //
         //  eg 1 for shops-->departments and one for departments --> products
-        BatchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 1
-        BatchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 1
+        batchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 1
+        batchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 1
     }
 
     def "970 ensure data loader is performant for multiple field with lists"() {
@@ -56,15 +49,15 @@ class DataLoaderPerformanceTest extends Specification {
         then:
         result.data == expectedExpensiveData
 
-        BatchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 1
-        BatchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 1
+        batchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() <= 2
+        batchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() <= 2
     }
 
     def "ensure data loader is performant for lists using async batch loading"() {
 
         when:
 
-        BatchCompareDataFetchers.useAsyncBatchLoading(true)
+        batchCompareDataFetchers.useAsyncBatchLoading(true)
 
         ExecutionInput executionInput = ExecutionInput.newExecutionInput().query(query).dataLoaderRegistry(dataLoaderRegistry).build()
         def result = graphQL.execute(executionInput)
@@ -73,8 +66,8 @@ class DataLoaderPerformanceTest extends Specification {
         result.data == expectedData
         //
         //  eg 1 for shops-->departments and one for departments --> products
-        BatchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 1
-        BatchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 1
+        batchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 1
+        batchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 1
 
     }
 
@@ -82,7 +75,7 @@ class DataLoaderPerformanceTest extends Specification {
 
         when:
 
-        BatchCompareDataFetchers.useAsyncBatchLoading(true)
+        batchCompareDataFetchers.useAsyncBatchLoading(true)
 
         ExecutionInput executionInput = ExecutionInput.newExecutionInput().query(expensiveQuery).dataLoaderRegistry(dataLoaderRegistry).build()
         def result = graphQL.execute(executionInput)
@@ -90,61 +83,8 @@ class DataLoaderPerformanceTest extends Specification {
         then:
         result.data == expectedExpensiveData
 
-        BatchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 1
-        BatchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 1
+        batchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() <= 2
+        batchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() <= 2
     }
 
-    def "data loader will work with deferred queries"() {
-
-        when:
-
-        ExecutionInput executionInput = ExecutionInput.newExecutionInput().query(deferredQuery).dataLoaderRegistry(dataLoaderRegistry).build()
-        def result = graphQL.execute(executionInput)
-
-        Map<Object, Object> extensions = result.getExtensions()
-        Publisher<ExecutionResult> deferredResultStream = (Publisher<ExecutionResult>) extensions.get(GraphQL.DEFERRED_RESULTS)
-
-        def subscriber = new CapturingSubscriber()
-        subscriber.subscribeTo(deferredResultStream)
-        Awaitility.await().untilTrue(subscriber.finished)
-
-
-        then:
-
-        result.data == expectedDeferredData
-
-        subscriber.executionResultData == expectedListOfDeferredData
-
-        //
-        //  with deferred results, we don't achieve the same efficiency
-        BatchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 3
-        BatchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 3
-    }
-
-    def "data loader will work with deferred queries on multiple levels deep"() {
-
-        when:
-
-        ExecutionInput executionInput = ExecutionInput.newExecutionInput().query(expensiveDeferredQuery).dataLoaderRegistry(dataLoaderRegistry).build()
-        def result = graphQL.execute(executionInput)
-
-        Map<Object, Object> extensions = result.getExtensions()
-        Publisher<ExecutionResult> deferredResultStream = (Publisher<ExecutionResult>) extensions.get(GraphQL.DEFERRED_RESULTS)
-
-        def subscriber = new CapturingSubscriber()
-        subscriber.subscribeTo(deferredResultStream)
-        Awaitility.await().untilTrue(subscriber.finished)
-
-
-        then:
-
-        result.data == expectedDeferredData
-
-        subscriber.executionResultData == expectedExpensiveDeferredData
-
-        //
-        //  with deferred results, we don't achieve the same efficiency
-        BatchCompareDataFetchers.departmentsForShopsBatchLoaderCounter.get() == 3
-        BatchCompareDataFetchers.productsForDepartmentsBatchLoaderCounter.get() == 3
-    }
 }

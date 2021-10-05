@@ -1,18 +1,31 @@
 package graphql.introspection
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import graphql.Assert
 import graphql.ExecutionInput
+import graphql.ExecutionResultImpl
 import graphql.GraphQL
 import graphql.TestUtil
-import graphql.language.AstPrinter
 import graphql.language.Document
 import graphql.language.EnumTypeDefinition
 import graphql.language.InputObjectTypeDefinition
+import graphql.language.IntValue
 import graphql.language.InterfaceTypeDefinition
+import graphql.language.ObjectField
 import graphql.language.ObjectTypeDefinition
+import graphql.language.ObjectValue
+import graphql.language.StringValue
 import graphql.language.UnionTypeDefinition
+import graphql.language.Value
+import graphql.schema.Coercing
+import graphql.schema.CoercingParseLiteralException
+import graphql.schema.CoercingParseValueException
+import graphql.schema.CoercingSerializeException
+import graphql.schema.GraphQLArgument
 import graphql.schema.GraphQLObjectType
+import graphql.schema.GraphQLScalarType
 import graphql.schema.GraphQLSchema
+import graphql.schema.idl.RuntimeWiring
 import graphql.schema.idl.SchemaPrinter
 import groovy.json.JsonSlurper
 import spock.lang.Specification
@@ -45,7 +58,7 @@ class IntrospectionResultToSchemaTest extends Specification {
                 "args": [
                   {
                     "name": "episode",
-                    "description": "comment about episode",
+                    "description": "comment about episode\non two lines",
                     "type": {
                       "kind": "ENUM",
                       "name": "Episode",
@@ -92,10 +105,12 @@ class IntrospectionResultToSchemaTest extends Specification {
         then:
         result == """type QueryType implements Query {
   hero(
-  #comment about episode
+  \"\"\"
+  comment about episode
+  on two lines
+  \"\"\"
   episode: Episode
-  foo: String = \"bar\"
-  ): Character @deprecated(reason: "killed off character")
+  foo: String = \"bar\"): Character @deprecated(reason: "killed off character")
 }"""
 
     }
@@ -195,15 +210,11 @@ class IntrospectionResultToSchemaTest extends Specification {
         def result = printAst(interfaceTypeDefinition)
 
         then:
-        result == """#A character in the Star Wars Trilogy
+        result == """"A character in the Star Wars Trilogy"
 interface Character {
-  #The id of the character.
   id: String!
-  #The name of the character.
   name: String
-  #The friends of the character, or an empty list if they have none.
   friends: [Character]
-  #Which movies they appear in.
   appearsIn: [Episode]
 }"""
 
@@ -247,13 +258,10 @@ interface Character {
         def result = printAst(enumTypeDef)
 
         then:
-        result == """#One of the films in the Star Wars Trilogy
+        result == """"One of the films in the Star Wars Trilogy"
 enum Episode {
-  #Released in 1977.
   NEWHOPE
-  #Released in 1980.
   EMPIRE
-  #Released in 1983.
   JEDI @deprecated(reason: "killed by clones")
 }"""
 
@@ -289,7 +297,7 @@ enum Episode {
         def result = printAst(unionTypeDefinition)
 
         then:
-        result == """#all the stuff
+        result == """"all the stuff"
 union Everything = Character | Episode"""
 
     }
@@ -344,9 +352,9 @@ union Everything = Character | Episode"""
         def result = printAst(inputObjectTypeDefinition)
 
         then:
-        result == """#input for characters
+        result == """"input for characters"
 input CharacterInput {
-  #first name
+  "first name"
   firstName: String
   lastName: String
   family: Boolean
@@ -378,7 +386,6 @@ input CharacterInput {
   subscription: SubscriptionType
 }
 """
-
     }
 
     def "test starwars introspection result"() {
@@ -398,66 +405,46 @@ input CharacterInput {
 
 type QueryType {
   hero(
-  #If omitted, returns the hero of the whole saga. If provided, returns the hero of that particular episode.
-  episode: Episode
-  ): Character
+  "If omitted, returns the hero of the whole saga. If provided, returns the hero of that particular episode."
+  episode: Episode): Character
   human(
-  #id of the human
-  id: String!
-  ): Human
+  "id of the human"
+  id: String!): Human
   droid(
-  #id of the droid
-  id: String!
-  ): Droid
+  "id of the droid"
+  id: String!): Droid
 }
 
-#A character in the Star Wars Trilogy
+"A character in the Star Wars Trilogy"
 interface Character {
-  #The id of the character.
   id: String!
-  #The name of the character.
   name: String
-  #The friends of the character, or an empty list if they have none.
   friends: [Character]
-  #Which movies they appear in.
   appearsIn: [Episode]
 }
 
-#One of the films in the Star Wars Trilogy
+"One of the films in the Star Wars Trilogy"
 enum Episode {
-  #Released in 1977.
   NEWHOPE
-  #Released in 1980.
   EMPIRE
-  #Released in 1983.
   JEDI
 }
 
-#A humanoid creature in the Star Wars universe.
+"A humanoid creature in the Star Wars universe."
 type Human implements Character {
-  #The id of the human.
   id: String!
-  #The name of the human.
   name: String
-  #The friends of the human, or an empty list if they have none.
   friends: [Character]
-  #Which movies they appear in.
   appearsIn: [Episode]
-  #The home planet of the human, or null if unknown.
   homePlanet: String
 }
 
-#A mechanical creature in the Star Wars universe.
+"A mechanical creature in the Star Wars universe."
 type Droid implements Character {
-  #The id of the droid.
   id: String!
-  #The name of the droid.
   name: String
-  #The friends of the droid, or an empty list if they have none.
   friends: [Character]
-  #Which movies they appear in.
   appearsIn: [Episode]
-  #The primary function of the droid.
   primaryFunction: String
 }
 """
@@ -503,19 +490,16 @@ type Episode {
   characters: [Character]
 }
 
-# Simpson seasons
+" Simpson seasons"
 enum Season {
-  # the beginning
   Season1
   Season2
   Season3
   Season4
-  # Another one
   Season5
   Season6
   Season7
   Season8
-  # Not really the last one :-)
   Season9
 }
 
@@ -537,7 +521,6 @@ input CharacterInput {
 """
     }
 
-
     def "test complete round trip"() {
         given:
         def queryType = GraphQLObjectType.newObject().name("Query").field(newFieldDefinition().name("hello").type(GraphQLString).build())
@@ -545,7 +528,8 @@ input CharacterInput {
 
 
         when:
-        def printedSchema = new SchemaPrinter().print(graphQLSchema)
+        def options = SchemaPrinter.Options.defaultOptions().includeDirectives(false)
+        def printedSchema = new SchemaPrinter(options).print(graphQLSchema)
 
         def graphQL = TestUtil.graphQL(printedSchema).build()
 
@@ -587,8 +571,9 @@ input CharacterInput {
             }
             '''
 
+        def options = SchemaPrinter.Options.defaultOptions().includeDirectives(false)
         def schema = TestUtil.schema(schemaSpec)
-        def printedSchema = new SchemaPrinter().print(schema)
+        def printedSchema = new SchemaPrinter(options).print(schema)
 
         when:
         StringWriter sw = new StringWriter()
@@ -608,7 +593,7 @@ input CharacterInput {
         def astPrinterResult = printAst(schemaDefinitionDocument)
 
         def actualSchema = TestUtil.schema(astPrinterResult)
-        def actualPrintedSchema = new SchemaPrinter().print(actualSchema)
+        def actualPrintedSchema = new SchemaPrinter(options).print(actualSchema)
 
         then:
         printedSchema == actualPrintedSchema
@@ -618,7 +603,7 @@ input CharacterInput {
 }
 
 type Query {
-  outputField(inputArg: InputType = {age : 666, name : "nameViaArg"}, inputBoolean: Boolean = true, inputInt: Int = 1, inputString: String = "viaArgString"): OutputType
+  outputField(inputArg: InputType = {name : "nameViaArg", age : 666}, inputBoolean: Boolean = true, inputInt: Int = 1, inputString: String = "viaArgString"): OutputType
 }
 
 input ComplexType {
@@ -629,7 +614,7 @@ input ComplexType {
 
 input InputType {
   age: Int = -1
-  complex: ComplexType = {boolean : true, int : 666, string : "string"}
+  complex: ComplexType = {string : "string", boolean : true, int : 666}
   name: String = "defaultName"
   rocks: Boolean = true
 }
@@ -691,5 +676,294 @@ input InputType {
         null                  | '{"name":"Subscription"}'
     }
 
+    def "create schema fail"() {
+        given:
+        def failResult = ExecutionResultImpl.newExecutionResult().build()
+
+        when:
+        Document document = introspectionResultToSchema.createSchemaDefinition(failResult)
+
+        then:
+        document == null
+    }
+
+    def "create scalars"() {
+        def input = ''' {
+            "kind": "SCALAR",
+            "name": "ScalarType",
+            "description": "description of ScalarType",
+      }
+      '''
+        def parsed = slurp(input)
+
+        when:
+        def scalarTypeDefinition = introspectionResultToSchema.createScalar(parsed)
+        def result = printAst(scalarTypeDefinition)
+
+        then:
+        result == """"description of ScalarType"\nscalar ScalarType"""
+    }
+
+    def " create directives "() {
+        def input = '''
+                    {
+                       "name": "customizedDirective",
+                       "locations": [
+                            "FIELD",
+                            "FRAGMENT_SPREAD",
+                            "INLINE_FRAGMENT"
+                       ],
+                       "args": []
+                    }
+        '''
+        def parsed = slurp(input)
+
+        when:
+        def directiveDefinition = introspectionResultToSchema.createDirective(parsed)
+        def result = printAst(directiveDefinition)
+
+        then:
+        result == """directive @customizedDirective on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT"""
+    }
+
+    def "create directives with arguments and default value"() {
+        def input = '''{
+            "name": "customizedDirective",
+            "description": "customized directive",
+            "locations": [
+                "FIELD",
+                "FRAGMENT_SPREAD",
+                "INLINE_FRAGMENT"
+            ],
+            "args": [
+                  {
+                    "name": "directiveArg",
+                    "description": "directive arg",
+                    "type": {
+                      "kind": "SCALAR",
+                      "name": "String",
+                      "ofType": null
+                    },
+                    "isDeprecated": false,
+                    "deprecationReason": null,
+                    "defaultValue": "\\"default Value\\""
+                  }
+             ]
+        }
+      '''
+        def parsed = slurp(input)
+
+        when:
+        def directiveDefinition = introspectionResultToSchema.createDirective(parsed)
+        def result = printAst(directiveDefinition)
+
+        then:
+        result == """"customized directive"
+directive @customizedDirective("directive arg"
+directiveArg: String = "default Value") on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT"""
+    }
+
+    def "create schema with directives"() {
+        def input = """{
+          "__schema": {
+            "queryType": {
+              "name": "QueryType"
+            },
+            "types": [],
+            "directives": [
+                {
+                    "name": "customizedDirective",
+                    "description": "customized directive",
+                    "locations": [
+                        "FIELD",
+                        "FRAGMENT_SPREAD",
+                        "INLINE_FRAGMENT"
+                    ],
+                    "args": [
+                          {
+                            "name": "directiveArg",
+                            "description": "directive arg",
+                            "type": {
+                              "kind": "SCALAR",
+                              "name": "String",
+                              "ofType": null
+                            },
+                            "isDeprecated": false,
+                            "deprecationReason": null,
+                            "defaultValue": "\\"default Value\\""
+                          }
+                     ]
+                },
+                {
+                    "name": "repeatableDirective",
+                    "description": "repeatable directive",
+                    "locations": [
+                        "FIELD_DEFINITION"
+                    ],
+                    "args": [],
+                    "isRepeatable":true
+                }
+            ]
+         }"""
+        def parsed = slurp(input)
+
+        when:
+        Document document = introspectionResultToSchema.createSchemaDefinition(parsed)
+        def result = printAst(document)
+
+        then:
+        result == """schema {
+  query: QueryType
 }
 
+"customized directive"
+directive @customizedDirective("directive arg"
+directiveArg: String = "default Value") on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+"repeatable directive"
+directive @repeatableDirective repeatable on FIELD_DEFINITION
+"""
+    }
+
+    def "round trip of default values of complex custom Scalar via SDL"() {
+        given:
+        def employeeRefScalar = GraphQLScalarType.newScalar().name("EmployeeRef").coercing(new Coercing() {
+            @Override
+            Object serialize(Object dataFetcherResult) throws CoercingSerializeException {
+                return null
+            }
+
+            @Override
+            Object parseValue(Object input) throws CoercingParseValueException {
+                return null
+            }
+
+            @Override
+            Object parseLiteral(Object input) throws CoercingParseLiteralException {
+                return null
+            }
+
+            @Override
+            Value valueToLiteral(Object input) {
+                return null
+            }
+        }).build()
+
+        def sdl = '''
+            scalar EmployeeRef
+            type Query{
+                foo(arg: EmployeeRef = {externalRef: "123", department: 5}): String 
+            }
+        '''
+        def options = SchemaPrinter.Options.defaultOptions().includeDirectives(false)
+        def rw = RuntimeWiring.newRuntimeWiring().scalar(employeeRefScalar).build()
+        def schema = TestUtil.schema(sdl, rw)
+        def printedSchema = new SchemaPrinter(options).print(schema)
+
+        when:
+        StringWriter sw = new StringWriter()
+        def introspectionResult = GraphQL.newGraphQL(schema).build().execute(ExecutionInput.newExecutionInput().query(INTROSPECTION_QUERY).build())
+
+        //
+        // round trip the introspection into JSON and then again to ensure
+        // we see any encoding aspects
+        //
+        ObjectMapper objectMapper = new ObjectMapper()
+        objectMapper.writer().writeValue(sw, introspectionResult.data)
+        def json = sw.toString()
+        def roundTripMap = objectMapper.readValue(json, Map.class)
+        Document schemaDefinitionDocument = introspectionResultToSchema.createSchemaDefinition(roundTripMap)
+
+        def astPrinterResult = printAst(schemaDefinitionDocument)
+
+        def actualSchema = TestUtil.schema(astPrinterResult, rw)
+        def actualPrintedSchema = new SchemaPrinter(options).print(actualSchema)
+
+        then:
+        printedSchema == actualPrintedSchema
+
+        actualPrintedSchema == '''type Query {
+  foo(arg: EmployeeRef = {externalRef : "123", department : 5}): String
+}
+
+scalar EmployeeRef
+'''
+    }
+
+    class ExternalEmployeeRef {
+        String externalRef;
+        String externalDepartment;
+    }
+
+    def "round trip of default values of complex custom Scalar via programmatic schema"() {
+        given:
+        def employeeRefScalar = GraphQLScalarType.newScalar().name("EmployeeRef").coercing(new Coercing() {
+            @Override
+            Object serialize(Object dataFetcherResult) throws CoercingSerializeException {
+                return null
+            }
+
+            @Override
+            Object parseValue(Object input) throws CoercingParseValueException {
+                return null
+            }
+
+            @Override
+            Object parseLiteral(Object input) throws CoercingParseLiteralException {
+                return null
+            }
+
+            @Override
+            Value valueToLiteral(Object input) {
+                if (input instanceof ExternalEmployeeRef) {
+                    def externalRef = StringValue.newStringValue(input.externalRef).build()
+                    def refField = ObjectField.newObjectField().name("ref").value(externalRef).build()
+                    def externalDepartment = IntValue.newIntValue(new BigInteger(input.externalDepartment)).build()
+                    def departmentField = ObjectField.newObjectField().name("department").value(externalDepartment).build()
+                    return ObjectValue.newObjectValue().objectField(refField).objectField(departmentField).build()
+                }
+                return Assert.assertShouldNeverHappen();
+            }
+        }).build()
+
+
+        def ref = new ExternalEmployeeRef(externalRef: "123", externalDepartment: "5")
+        def argument = GraphQLArgument.newArgument().name("arg").type(employeeRefScalar).defaultValueProgrammatic(ref).build()
+        def field = newFieldDefinition().name("foo").type(GraphQLString).argument(argument).build()
+        def queryType = GraphQLObjectType.newObject().name("Query").field(field).build()
+        def schema = GraphQLSchema.newSchema().query(queryType).build()
+
+        def options = SchemaPrinter.Options.defaultOptions().includeDirectives(false)
+        def printedSchema = new SchemaPrinter(options).print(schema)
+
+        when:
+        StringWriter sw = new StringWriter()
+        def introspectionResult = GraphQL.newGraphQL(schema).build().execute(ExecutionInput.newExecutionInput().query(INTROSPECTION_QUERY).build())
+
+        //
+        // round trip the introspection into JSON and then again to ensure
+        // we see any encoding aspects
+        //
+        ObjectMapper objectMapper = new ObjectMapper()
+        objectMapper.writer().writeValue(sw, introspectionResult.data)
+        def json = sw.toString()
+        def roundTripMap = objectMapper.readValue(json, Map.class)
+        Document schemaDefinitionDocument = introspectionResultToSchema.createSchemaDefinition(roundTripMap)
+
+        def astPrinterResult = printAst(schemaDefinitionDocument)
+
+        def rw = RuntimeWiring.newRuntimeWiring().scalar(employeeRefScalar).build()
+        def actualSchema = TestUtil.schema(astPrinterResult, rw)
+        def actualPrintedSchema = new SchemaPrinter(options).print(actualSchema)
+
+        then:
+        printedSchema == actualPrintedSchema
+
+        actualPrintedSchema == '''type Query {
+  foo(arg: EmployeeRef = {ref : "123", department : 5}): String
+}
+
+scalar EmployeeRef
+'''
+    }
+}

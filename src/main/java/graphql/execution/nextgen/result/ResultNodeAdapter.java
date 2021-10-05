@@ -1,15 +1,18 @@
 package graphql.execution.nextgen.result;
 
-import graphql.Assert;
-import graphql.PublicApi;
+import graphql.Internal;
 import graphql.util.NodeAdapter;
 import graphql.util.NodeLocation;
 
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-@PublicApi
+import static graphql.Assert.assertNotNull;
+import static graphql.Assert.assertTrue;
+
+@Internal
 public class ResultNodeAdapter implements NodeAdapter<ExecutionResultNode> {
 
     public static final ResultNodeAdapter RESULT_NODE_ADAPTER = new ResultNodeAdapter();
@@ -19,22 +22,24 @@ public class ResultNodeAdapter implements NodeAdapter<ExecutionResultNode> {
     }
 
     @Override
-    public Map<String, List<ExecutionResultNode>> getNamedChildren(ExecutionResultNode node) {
-        Map<String, List<ExecutionResultNode>> result = new LinkedHashMap<>();
-        result.put(null, node.getChildren());
-        return result;
+    public Map<String, List<ExecutionResultNode>> getNamedChildren(ExecutionResultNode parentNode) {
+        return Collections.singletonMap(null, parentNode.getChildren());
     }
 
     @Override
-    public ExecutionResultNode withNewChildren(ExecutionResultNode node, Map<String, List<ExecutionResultNode>> newChildren) {
-        Assert.assertTrue(newChildren.size() == 1);
+    public ExecutionResultNode withNewChildren(ExecutionResultNode parentNode, Map<String, List<ExecutionResultNode>> newChildren) {
+        assertTrue(newChildren.size() == 1);
         List<ExecutionResultNode> childrenList = newChildren.get(null);
-        Assert.assertNotNull(childrenList);
-        return node.withNewChildren(childrenList);
+        assertNotNull(childrenList);
+        return parentNode.withNewChildren(childrenList);
     }
 
     @Override
-    public ExecutionResultNode removeChild(ExecutionResultNode node, NodeLocation location) {
-        throw new UnsupportedOperationException();
+    public ExecutionResultNode removeChild(ExecutionResultNode parentNode, NodeLocation location) {
+        int index = location.getIndex();
+        List<ExecutionResultNode> childrenList = new ArrayList<>(parentNode.getChildren());
+        assertTrue(index >= 0 && index < childrenList.size(), () -> "The remove index MUST be within the range of the children");
+        childrenList.remove(index);
+        return parentNode.withNewChildren(childrenList);
     }
 }

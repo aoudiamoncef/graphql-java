@@ -1,6 +1,9 @@
 package graphql;
 
 
+import com.google.common.collect.ImmutableList;
+import graphql.collect.ImmutableKit;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -8,15 +11,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-import static java.util.stream.Collectors.toList;
+import static graphql.collect.ImmutableKit.map;
 
 @Internal
 public class ExecutionResultImpl implements ExecutionResult {
 
-    private final Object data;
     private final List<GraphQLError> errors;
-    private final transient boolean dataPresent;
+    private final Object data;
     private final transient Map<Object, Object> extensions;
+    private final transient boolean dataPresent;
 
     public ExecutionResultImpl(GraphQLError error) {
         this(false, null, Collections.singletonList(error), null);
@@ -34,14 +37,18 @@ public class ExecutionResultImpl implements ExecutionResult {
         this(true, data, errors, extensions);
     }
 
+    public ExecutionResultImpl(ExecutionResultImpl other) {
+        this(other.dataPresent, other.data, other.errors, other.extensions);
+    }
+
     private ExecutionResultImpl(boolean dataPresent, Object data, List<? extends GraphQLError> errors, Map<Object, Object> extensions) {
         this.dataPresent = dataPresent;
         this.data = data;
 
-        if (errors != null && !errors.isEmpty()) {
-            this.errors = Collections.unmodifiableList(new ArrayList<>(errors));
+        if (errors != null) {
+            this.errors = ImmutableList.copyOf(errors);
         } else {
-            this.errors = Collections.emptyList();
+            this.errors = ImmutableKit.emptyList();
         }
 
         this.extensions = extensions;
@@ -52,15 +59,15 @@ public class ExecutionResultImpl implements ExecutionResult {
     }
 
     @Override
+    public List<GraphQLError> getErrors() {
+        return errors;
+    }
+
+    @Override
     @SuppressWarnings("TypeParameterUnusedInFormals")
     public <T> T getData() {
         //noinspection unchecked
         return (T) data;
-    }
-
-    @Override
-    public List<GraphQLError> getErrors() {
-        return errors;
     }
 
     @Override
@@ -84,7 +91,7 @@ public class ExecutionResultImpl implements ExecutionResult {
     }
 
     private Object errorsToSpec(List<GraphQLError> errors) {
-        return errors.stream().map(GraphQLError::toSpecification).collect(toList());
+        return map(errors, GraphQLError::toSpecification);
     }
 
     @Override
@@ -113,7 +120,7 @@ public class ExecutionResultImpl implements ExecutionResult {
         private List<GraphQLError> errors = new ArrayList<>();
         private Map<Object, Object> extensions;
 
-        public Builder from(ExecutionResultImpl executionResult) {
+        public Builder from(ExecutionResult executionResult) {
             dataPresent = executionResult.isDataPresent();
             data = executionResult.getData();
             errors = new ArrayList<>(executionResult.getErrors());

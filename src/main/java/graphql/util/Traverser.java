@@ -5,7 +5,6 @@ import graphql.Internal;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,9 +35,7 @@ public class Traverser<T> {
     private static <T> Function<? super T, Map<String, ? extends List<T>>> wrapListFunction(Function<? super T, ? extends List<T>> listFn) {
         return node -> {
             List<T> childs = listFn.apply(node);
-            Map<String, List<T>> result = new LinkedHashMap<>();
-            result.put(null, childs);
-            return result;
+            return Collections.singletonMap(null, childs);
         };
     }
 
@@ -112,10 +109,11 @@ public class Traverser<T> {
                 currentContext = (DefaultTraverserContext) traverserState.pop();
                 currentContext.setCurAccValue(currentAccValue);
                 currentContext.setChildrenContexts(childrenContextMap);
+                currentContext.setPhase(TraverserContext.Phase.LEAVE);
                 TraversalControl traversalControl = visitor.leave(currentContext);
                 currentAccValue = currentContext.getNewAccumulate();
-                assertNotNull(traversalControl, "result of leave must not be null");
-                assertTrue(CONTINUE_OR_QUIT.contains(traversalControl), "result can only return CONTINUE or QUIT");
+                assertNotNull(traversalControl, () -> "result of leave must not be null");
+                assertTrue(CONTINUE_OR_QUIT.contains(traversalControl), () -> "result can only return CONTINUE or QUIT");
 
                 switch (traversalControl) {
                     case QUIT:
@@ -131,19 +129,21 @@ public class Traverser<T> {
 
             if (currentContext.isVisited()) {
                 currentContext.setCurAccValue(currentAccValue);
+                currentContext.setPhase(TraverserContext.Phase.BACKREF);
                 TraversalControl traversalControl = visitor.backRef(currentContext);
                 currentAccValue = currentContext.getNewAccumulate();
-                assertNotNull(traversalControl, "result of backRef must not be null");
-                assertTrue(CONTINUE_OR_QUIT.contains(traversalControl), "backRef can only return CONTINUE or QUIT");
+                assertNotNull(traversalControl, () -> "result of backRef must not be null");
+                assertTrue(CONTINUE_OR_QUIT.contains(traversalControl), () -> "backRef can only return CONTINUE or QUIT");
                 if (traversalControl == QUIT) {
                     break traverseLoop;
                 }
             } else {
                 currentContext.setCurAccValue(currentAccValue);
                 Object nodeBeforeEnter = currentContext.thisNode();
+                currentContext.setPhase(TraverserContext.Phase.ENTER);
                 TraversalControl traversalControl = visitor.enter(currentContext);
                 currentAccValue = currentContext.getNewAccumulate();
-                assertNotNull(traversalControl, "result of enter must not be null");
+                assertNotNull(traversalControl, () -> "result of enter must not be null");
                 this.traverserState.addVisited((T) nodeBeforeEnter);
                 switch (traversalControl) {
                     case QUIT:
@@ -158,6 +158,7 @@ public class Traverser<T> {
                 }
             }
         }
+
         TraverserResult traverserResult = new TraverserResult(currentAccValue);
         return traverserResult;
     }

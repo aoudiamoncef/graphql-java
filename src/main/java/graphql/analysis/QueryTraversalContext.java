@@ -4,25 +4,24 @@ import graphql.Internal;
 import graphql.language.SelectionSetContainer;
 import graphql.schema.GraphQLCompositeType;
 import graphql.schema.GraphQLOutputType;
+import graphql.schema.GraphQLTypeUtil;
 
 /**
- * QueryTraversal helper class that maintains traversal context as
+ * QueryTraverser helper class that maintains traversal context as
  * the query traversal algorithm traverses down the Selection AST
  */
 @Internal
 class QueryTraversalContext {
 
+    // never used for scalars/enums, always a possibly wrapped composite type
     private final GraphQLOutputType outputType;
-    private final GraphQLCompositeType rawType;
     private final QueryVisitorFieldEnvironment environment;
     private final SelectionSetContainer selectionSetContainer;
 
     QueryTraversalContext(GraphQLOutputType outputType,
-                          GraphQLCompositeType rawType,
                           QueryVisitorFieldEnvironment environment,
                           SelectionSetContainer selectionSetContainer) {
         this.outputType = outputType;
-        this.rawType = rawType;
         this.environment = environment;
         this.selectionSetContainer = selectionSetContainer;
     }
@@ -31,9 +30,10 @@ class QueryTraversalContext {
         return outputType;
     }
 
-    public GraphQLCompositeType getRawType() {
-        return rawType;
+    public GraphQLCompositeType getUnwrappedOutputType() {
+        return (GraphQLCompositeType) GraphQLTypeUtil.unwrapAll(outputType);
     }
+
 
     public QueryVisitorFieldEnvironment getEnvironment() {
         return environment;

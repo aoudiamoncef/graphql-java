@@ -12,13 +12,14 @@ import graphql.execution.MergedField;
 import graphql.execution.MergedSelectionSet;
 import graphql.execution.ResolveType;
 import graphql.execution.nextgen.result.ExecutionResultNode;
+import graphql.execution.nextgen.result.ResolvedValue;
 import graphql.schema.GraphQLObjectType;
 import graphql.schema.GraphQLOutputType;
-import graphql.util.FpKit;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static graphql.collect.ImmutableKit.map;
 import static graphql.execution.FieldCollectorParameters.newParameters;
 
 @Internal
@@ -38,7 +39,7 @@ public class ExecutionStrategyUtil {
 
     private List<CompletableFuture<FetchedValueAnalysis>> fetchAndAnalyze(ExecutionContext context, FieldSubSelection fieldSubSelection) {
 
-        return FpKit.map(fieldSubSelection.getMergedSelectionSet().getSubFieldsList(),
+        return map(fieldSubSelection.getMergedSelectionSet().getSubFieldsList(),
                 mergedField -> fetchAndAnalyzeField(context, fieldSubSelection.getSource(), fieldSubSelection.getLocalContext(), mergedField, fieldSubSelection.getExecutionStepInfo()));
 
     }
@@ -57,7 +58,7 @@ public class ExecutionStrategyUtil {
     }
 
     public List<ExecutionResultNode> fetchedValueAnalysisToNodes(List<FetchedValueAnalysis> fetchedValueAnalysisList) {
-        return FpKit.map(fetchedValueAnalysisList, fetchedValueAnalysis -> resultNodesCreator.createResultNode(fetchedValueAnalysis));
+        return map(fetchedValueAnalysisList, fetchedValueAnalysis -> resultNodesCreator.createResultNode(fetchedValueAnalysis));
     }
 
 
@@ -66,11 +67,10 @@ public class ExecutionStrategyUtil {
         return fetchedValueAnalysis;
     }
 
-    public FieldSubSelection createFieldSubSelection(ExecutionContext executionContext, FetchedValueAnalysis analysis) {
-        ExecutionStepInfo executionInfo = analysis.getExecutionStepInfo();
-        MergedField field = analysis.getField();
-        Object source = analysis.getCompletedValue();
-        Object localContext = analysis.getFetchedValue().getLocalContext();
+    public FieldSubSelection createFieldSubSelection(ExecutionContext executionContext, ExecutionStepInfo executionInfo, ResolvedValue resolvedValue) {
+        MergedField field = executionInfo.getField();
+        Object source = resolvedValue.getCompletedValue();
+        Object localContext = resolvedValue.getLocalContext();
 
         GraphQLOutputType sourceType = executionInfo.getUnwrappedNonNullType();
         GraphQLObjectType resolvedObjectType = resolveType.resolveType(executionContext, field, source, executionInfo.getArguments(), sourceType);

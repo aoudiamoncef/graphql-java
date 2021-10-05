@@ -53,7 +53,7 @@ import static java.util.Arrays.asList;
 @SuppressWarnings("unchecked")
 public class HttpMain extends AbstractHandler {
 
-    static final int PORT = 3000;
+    static final int PORT = 8080;
     static GraphQLSchema starWarsSchema = null;
 
     public static void main(String[] args) throws Exception {
@@ -116,9 +116,7 @@ public class HttpMain extends AbstractHandler {
                 .query(parameters.getQuery())
                 .operationName(parameters.getOperationName())
                 .variables(parameters.getVariables())
-                .dataLoaderRegistry(dataLoaderRegistry)
-                ;
-
+                .dataLoaderRegistry(dataLoaderRegistry);
 
 
         //
@@ -135,7 +133,7 @@ public class HttpMain extends AbstractHandler {
         Map<String, Object> context = new HashMap<>();
         context.put("YouAppSecurityClearanceLevel", "CodeRed");
         context.put("YouAppExecutingUser", "Dr Nefarious");
-        executionInput.context(context);
+        executionInput.graphQLContext(context);
 
         //
         // you need a schema in order to execute queries
@@ -154,13 +152,17 @@ public class HttpMain extends AbstractHandler {
                 // instrumentation is pluggable
                 .instrumentation(instrumentation)
                 .build();
-        ExecutionResult executionResult = graphQL.execute(executionInput.build());
+        ExecutionResult executionResult = graphQL.execute(executionInput);
 
         returnAsJson(httpResponse, executionResult);
     }
 
 
     private void returnAsJson(HttpServletResponse response, ExecutionResult executionResult) throws IOException {
+        sendNormalResponse(response, executionResult);
+    }
+
+    private void sendNormalResponse(HttpServletResponse response, ExecutionResult executionResult) throws IOException {
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);
         JsonKit.toJson(response, executionResult.toSpecification());

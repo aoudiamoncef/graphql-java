@@ -1,7 +1,10 @@
 package graphql.validation;
 
 
+import com.google.common.collect.ImmutableSet;
 import graphql.Assert;
+import graphql.GraphQLError;
+import graphql.Internal;
 import graphql.language.ArrayValue;
 import graphql.language.ListType;
 import graphql.language.NonNullType;
@@ -26,17 +29,17 @@ import graphql.schema.visibility.GraphqlFieldVisibility;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import static graphql.schema.GraphQLTypeUtil.isList;
 import static graphql.schema.GraphQLTypeUtil.isNonNull;
 import static graphql.schema.GraphQLTypeUtil.unwrapOne;
 
+@Internal
 public class ValidationUtil {
 
-    public TypeName getUnmodifiedType(Type type) {
+    public TypeName getUnmodifiedType(Type<?> type) {
         if (type instanceof ListType) {
             return getUnmodifiedType(((ListType) type).getType());
         } else if (type instanceof NonNullType) {
@@ -47,31 +50,31 @@ public class ValidationUtil {
         return Assert.assertShouldNeverHappen();
     }
 
-    protected void handleNullError(Value value, GraphQLType type) {
+    protected void handleNullError(Value<?> value, GraphQLType type) {
     }
 
-    protected void handleScalarError(Value value, GraphQLScalarType type) {
+    protected void handleScalarError(Value<?> value, GraphQLScalarType type, GraphQLError invalid) {
     }
 
-    protected void handleEnumError(Value value, GraphQLEnumType type) {
+    protected void handleEnumError(Value<?> value, GraphQLEnumType type, GraphQLError invalid) {
     }
 
-    protected void handleNotObjectError(Value value, GraphQLInputObjectType type) {
+    protected void handleNotObjectError(Value<?> value, GraphQLInputObjectType type) {
     }
 
-    protected void handleMissingFieldsError(Value value, GraphQLInputObjectType type, Set<String> missingFields) {
+    protected void handleMissingFieldsError(Value<?> value, GraphQLInputObjectType type, Set<String> missingFields) {
     }
 
-    protected void handleExtraFieldError(Value value, GraphQLInputObjectType type, ObjectField objectField) {
+    protected void handleExtraFieldError(Value<?> value, GraphQLInputObjectType type, ObjectField objectField) {
     }
 
     protected void handleFieldNotValidError(ObjectField objectField, GraphQLInputObjectType type) {
     }
 
-    protected void handleFieldNotValidError(Value value, GraphQLType type, int index) {
+    protected void handleFieldNotValidError(Value<?> value, GraphQLType type, int index) {
     }
 
-    public boolean isValidLiteralValue(Value value, GraphQLType type, GraphQLSchema schema) {
+    public boolean isValidLiteralValue(Value<?> value, GraphQLType type, GraphQLSchema schema) {
         if (value == null || value instanceof NullValue) {
             boolean valid = !(isNonNull(type));
             if (!valid) {
@@ -87,18 +90,14 @@ public class ValidationUtil {
         }
 
         if (type instanceof GraphQLScalarType) {
-            boolean valid = parseLiteral(value, ((GraphQLScalarType) type).getCoercing());
-            if (!valid) {
-                handleScalarError(value, (GraphQLScalarType) type);
-            }
-            return valid;
+            Optional<GraphQLError> invalid = parseLiteral(value, ((GraphQLScalarType) type).getCoercing());
+            invalid.ifPresent(graphQLError -> handleScalarError(value, (GraphQLScalarType) type, graphQLError));
+            return !invalid.isPresent();
         }
         if (type instanceof GraphQLEnumType) {
-            boolean valid = parseLiteral(value, ((GraphQLEnumType) type).getCoercing());
-            if (!valid) {
-                handleEnumError(value, (GraphQLEnumType) type);
-            }
-            return valid;
+            Optional<GraphQLError> invalid = parseLiteralEnum(value, (GraphQLEnumType) type);
+            invalid.ifPresent(graphQLError -> handleEnumError(value, (GraphQLEnumType) type, graphQLError));
+            return !invalid.isPresent();
         }
 
         if (isList(type)) {
@@ -108,15 +107,25 @@ public class ValidationUtil {
 
     }
 
-    private boolean parseLiteral(Value value, Coercing coercing) {
+    private Optional<GraphQLError> parseLiteralEnum(Value<?> value, GraphQLEnumType graphQLEnumType) {
         try {
-            return coercing.parseLiteral(value) != null;
+            graphQLEnumType.parseLiteral(value);
+            return Optional.empty();
         } catch (CoercingParseLiteralException e) {
-            return false;
+            return Optional.of(e);
         }
     }
 
-    private boolean isValidLiteralValue(Value value, GraphQLInputObjectType type, GraphQLSchema schema) {
+    private Optional<GraphQLError> parseLiteral(Value<?> value, Coercing<?, ?> coercing) {
+        try {
+            coercing.parseLiteral(value);
+            return Optional.empty();
+        } catch (CoercingParseLiteralException e) {
+            return Optional.of(e);
+        }
+    }
+
+    private boolean isValidLiteralValue(Value<?> value, GraphQLInputObjectType type, GraphQLSchema schema) {
         if (!(value instanceof ObjectValue)) {
             handleNotObjectError(value, type);
             return false;
@@ -150,9 +159,9 @@ public class ValidationUtil {
     private Set<String> getMissingFields(GraphQLInputObjectType type, Map<String, ObjectField> objectFieldMap, GraphqlFieldVisibility fieldVisibility) {
         return fieldVisibility.getFieldDefinitions(type).stream()
                 .filter(field -> isNonNull(field.getType()))
+                .filter(value -> (value.getInputFieldDefaultValue().isNotSet()) && !objectFieldMap.containsKey(value.getName()))
                 .map(GraphQLInputObjectField::getName)
-                .filter(((Predicate<String>) objectFieldMap::containsKey).negate())
-                .collect(Collectors.toSet());
+                .collect(ImmutableSet.toImmutableSet());
     }
 
     private Map<String, ObjectField> fieldMap(ObjectValue objectValue) {
@@ -163,7 +172,7 @@ public class ValidationUtil {
         return result;
     }
 
-    private boolean isValidLiteralValue(Value value, GraphQLList type, GraphQLSchema schema) {
+    private boolean isValidLiteralValue(Value<?> value, GraphQLList type, GraphQLSchema schema) {
         GraphQLType wrappedType = type.getWrappedType();
         if (value instanceof ArrayValue) {
             List<Value> values = ((ArrayValue) value).getValues();

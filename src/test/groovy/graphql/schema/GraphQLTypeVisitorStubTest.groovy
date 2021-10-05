@@ -1,13 +1,11 @@
 package graphql.schema
 
-import graphql.Scalars
 import graphql.util.TraversalControl
 import graphql.util.TraverserContext
 import spock.lang.Specification
 import spock.lang.Unroll
 
 class GraphQLTypeVisitorStubTest extends Specification {
-
 
     @Unroll
     def "#visitMethod scalar type"() {

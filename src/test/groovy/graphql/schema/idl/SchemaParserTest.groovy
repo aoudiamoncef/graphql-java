@@ -4,6 +4,7 @@ import graphql.language.EnumTypeDefinition
 import graphql.language.InterfaceTypeDefinition
 import graphql.language.ObjectTypeDefinition
 import graphql.language.ScalarTypeDefinition
+import graphql.parser.ParserOptions
 import graphql.schema.idl.errors.SchemaProblem
 import spock.lang.Specification
 import spock.lang.Unroll
@@ -29,7 +30,7 @@ class SchemaParserTest extends Specification {
                 is_bar : Boolean
             }     
 
-            type Baz implements Foo, Goo {
+            type Baz implements Foo & Goo {
                 is_foo : Boolean
                 is_goo : Boolean
                 is_baz : Boolean
@@ -114,7 +115,7 @@ class SchemaParserTest extends Specification {
         typeExtensions.size() == 1
         typeExtensions.get("Query") != null
 
-        scalarTypes.size() == 11 // includes standard scalars
+        scalarTypes.size() == 6 // only contains the 5 graphql standard types and URL
         scalarTypes.get("Url") instanceof ScalarTypeDefinition
 
 
@@ -295,5 +296,68 @@ class SchemaParserTest extends Specification {
         ''' extend union Foo @directive = a | b | c'''   | _
 
         ''' extend scalar Foo @directive'''              | _ // special case - has no innards
+    }
+
+    def "1447 - non schema elements are detected"() {
+        def schema = '''     
+
+        type Query {
+            allUsers: [User!]!
+        }
+
+        type User {
+            name: String!
+            age: Int!
+        }
+
+        {
+            allUsers {
+                ... addressDetails
+            }
+        }
+
+        fragment addressDetails on User {
+            name
+            age
+        }
+
+        mutation CreateReviewForEpisode($ep: Episode!, $review: ReviewInput!) {
+            createReview(episode: $ep, review: $review) {
+                stars
+                commentary
+            }
+        }
+
+        '''
+        when:
+        read(schema)
+        then:
+        def schemaProblem = thrown(SchemaProblem)
+        schemaProblem.getErrors().size() == 3
+        schemaProblem.getErrors()[0].getMessage().contains("OperationDefinition")
+        schemaProblem.getErrors()[1].getMessage().contains("FragmentDefinition")
+        schemaProblem.getErrors()[2].getMessage().contains("OperationDefinition")
+    }
+
+    def "large schema files can be parsed - there is no limit"() {
+        def sdl = "type Query {\n"
+        for (int i = 0; i < 30000; i++) {
+            sdl += " f" + i + " : ID\n"
+        }
+        sdl += "}"
+
+        when:
+        def typeDefinitionRegistry = new SchemaParser().parse(sdl)
+        then:
+        typeDefinitionRegistry != null
+
+
+        when: "options are used they will be respected"
+        def options = ParserOptions.defaultParserOptions.transform({ it.maxTokens(100) })
+        new SchemaParser().parse(new StringReader(sdl), options)
+        then:
+        def e = thrown(SchemaProblem)
+        e.errors[0].message.contains("parsing has been cancelled")
+
     }
 }

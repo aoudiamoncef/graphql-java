@@ -1,15 +1,22 @@
 package graphql.language;
 
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
 import graphql.util.TraversalControl;
 import graphql.util.TraverserContext;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+import static graphql.collect.ImmutableKit.emptyMap;
 import static graphql.language.NodeChildrenContainer.newNodeChildrenContainer;
 
 @PublicApi
@@ -21,8 +28,8 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
     public static final String CHILD_TYPE_NAME = "typeName";
 
     @Internal
-    protected OperationTypeDefinition(String name, TypeName typeName, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars) {
-        super(sourceLocation, comments, ignoredChars);
+    protected OperationTypeDefinition(String name, TypeName typeName, SourceLocation sourceLocation, List<Comment> comments, IgnoredChars ignoredChars, Map<String, String> additionalData) {
+        super(sourceLocation, comments, ignoredChars, additionalData);
         this.name = name;
         this.typeName = typeName;
     }
@@ -30,11 +37,11 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
     /**
      * alternative to using a Builder for convenience
      *
-     * @param name of the operation
+     * @param name     of the operation
      * @param typeName the type in play
      */
     public OperationTypeDefinition(String name, TypeName typeName) {
-        this(name, typeName, null, new ArrayList<>(), IgnoredChars.EMPTY);
+        this(name, typeName, null, emptyList(), IgnoredChars.EMPTY, emptyMap());
     }
 
     public TypeName getTypeName() {
@@ -78,12 +85,12 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
 
         OperationTypeDefinition that = (OperationTypeDefinition) o;
 
-        return NodeUtil.isEqualTo(this.name, that.name);
+        return Objects.equals(this.name, that.name);
     }
 
     @Override
     public OperationTypeDefinition deepCopy() {
-        return new OperationTypeDefinition(name, deepCopy(typeName), getSourceLocation(), getComments(), getIgnoredChars());
+        return new OperationTypeDefinition(name, deepCopy(typeName), getSourceLocation(), getComments(), getIgnoredChars(), getAdditionalData());
     }
 
     @Override
@@ -111,10 +118,11 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
 
     public static final class Builder implements NodeBuilder {
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private String name;
         private TypeName typeName;
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
@@ -122,10 +130,11 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
 
         private Builder(OperationTypeDefinition existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
             this.typeName = existing.getTypeName();
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -135,7 +144,7 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -154,9 +163,19 @@ public class OperationTypeDefinition extends AbstractNode<OperationTypeDefinitio
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
+
         public OperationTypeDefinition build() {
-            OperationTypeDefinition operationTypeDefinition = new OperationTypeDefinition(name, typeName, sourceLocation, comments, ignoredChars);
-            return operationTypeDefinition;
+            return new OperationTypeDefinition(name, typeName, sourceLocation, comments, ignoredChars, additionalData);
         }
     }
 }

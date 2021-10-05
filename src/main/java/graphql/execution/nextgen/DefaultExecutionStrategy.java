@@ -1,9 +1,12 @@
 package graphql.execution.nextgen;
 
+import graphql.ExecutionResult;
 import graphql.Internal;
 import graphql.execution.ExecutionContext;
+import graphql.execution.ExecutionStepInfo;
 import graphql.execution.nextgen.result.ExecutionResultNode;
 import graphql.execution.nextgen.result.ObjectExecutionResultNode;
+import graphql.execution.nextgen.result.ResolvedValue;
 import graphql.execution.nextgen.result.ResultNodesUtil;
 import graphql.execution.nextgen.result.RootExecutionResultNode;
 import graphql.util.NodeMultiZipper;
@@ -12,15 +15,22 @@ import graphql.util.NodeZipper;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static graphql.collect.ImmutableKit.map;
 import static graphql.execution.Async.each;
 import static graphql.execution.Async.mapCompose;
-import static graphql.util.FpKit.map;
 
 @Internal
 public class DefaultExecutionStrategy implements ExecutionStrategy {
 
     ExecutionStrategyUtil util = new ExecutionStrategyUtil();
+    ExecutionHelper executionHelper = new ExecutionHelper();
 
+    @Override
+    public CompletableFuture<ExecutionResult> execute(ExecutionContext context) {
+        FieldSubSelection fieldSubSelection = executionHelper.getFieldSubSelection(context);
+        return executeImpl(context, fieldSubSelection)
+                .thenApply(ResultNodesUtil::toExecutionResult);
+    }
 
     /*
      * the fundamental algorithm is:
@@ -28,8 +38,7 @@ public class DefaultExecutionStrategy implements ExecutionStrategy {
      * - convert the fetched value analysis into result node
      * - get all unresolved result nodes and resolve the sub selection (start again recursively)
      */
-    @Override
-    public CompletableFuture<RootExecutionResultNode> execute(ExecutionContext context, FieldSubSelection fieldSubSelection) {
+    public CompletableFuture<RootExecutionResultNode> executeImpl(ExecutionContext context, FieldSubSelection fieldSubSelection) {
         return resolveSubSelection(context, fieldSubSelection)
                 .thenApply(RootExecutionResultNode::new);
     }
@@ -47,10 +56,11 @@ public class DefaultExecutionStrategy implements ExecutionStrategy {
     }
 
     private CompletableFuture<NodeZipper<ExecutionResultNode>> resolveNode(ExecutionContext executionContext, NodeZipper<ExecutionResultNode> unresolvedNode) {
-        FetchedValueAnalysis fetchedValueAnalysis = unresolvedNode.getCurNode().getFetchedValueAnalysis();
-        FieldSubSelection fieldSubSelection = util.createFieldSubSelection(executionContext, fetchedValueAnalysis);
+        ExecutionStepInfo executionStepInfo = unresolvedNode.getCurNode().getExecutionStepInfo();
+        ResolvedValue resolvedValue = unresolvedNode.getCurNode().getResolvedValue();
+        FieldSubSelection fieldSubSelection = util.createFieldSubSelection(executionContext, executionStepInfo, resolvedValue);
         return resolveSubSelection(executionContext, fieldSubSelection)
-                .thenApply(resolvedChildMap -> unresolvedNode.withNewNode(new ObjectExecutionResultNode(fetchedValueAnalysis, resolvedChildMap)));
+                .thenApply(resolvedChildMap -> unresolvedNode.withNewNode(new ObjectExecutionResultNode(executionStepInfo, resolvedValue, resolvedChildMap)));
     }
 
     private CompletableFuture<ExecutionResultNode> resolvedNodesToResultNode(

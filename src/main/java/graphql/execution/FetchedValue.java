@@ -1,9 +1,9 @@
 package graphql.execution;
 
+import com.google.common.collect.ImmutableList;
 import graphql.GraphQLError;
 import graphql.Internal;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -12,9 +12,9 @@ public class FetchedValue {
     private final Object fetchedValue;
     private final Object rawFetchedValue;
     private final Object localContext;
-    private final List<GraphQLError> errors;
+    private final ImmutableList<GraphQLError> errors;
 
-    private FetchedValue(Object fetchedValue, Object rawFetchedValue, List<GraphQLError> errors, Object localContext) {
+    private FetchedValue(Object fetchedValue, Object rawFetchedValue, ImmutableList<GraphQLError> errors, Object localContext) {
         this.fetchedValue = fetchedValue;
         this.rawFetchedValue = rawFetchedValue;
         this.errors = errors;
@@ -33,7 +33,7 @@ public class FetchedValue {
     }
 
     public List<GraphQLError> getErrors() {
-        return new ArrayList<>(errors);
+        return errors;
     }
 
     public Object getLocalContext() {
@@ -44,6 +44,16 @@ public class FetchedValue {
         Builder builder = newFetchedValue(this);
         builderConsumer.accept(builder);
         return builder.build();
+    }
+
+    @Override
+    public String toString() {
+        return "FetchedValue{" +
+                "fetchedValue=" + fetchedValue +
+                ", rawFetchedValue=" + rawFetchedValue +
+                ", localContext=" + localContext +
+                ", errors=" + errors +
+                '}';
     }
 
     public static Builder newFetchedValue() {
@@ -64,7 +74,7 @@ public class FetchedValue {
         private Object fetchedValue;
         private Object rawFetchedValue;
         private Object localContext;
-        private List<GraphQLError> errors = new ArrayList<>();
+        private ImmutableList<GraphQLError> errors = ImmutableList.of();
 
         public Builder fetchedValue(Object fetchedValue) {
             this.fetchedValue = fetchedValue;
@@ -82,7 +92,7 @@ public class FetchedValue {
         }
 
         public Builder errors(List<GraphQLError> errors) {
-            this.errors = errors;
+            this.errors = ImmutableList.copyOf(errors);
             return this;
         }
 

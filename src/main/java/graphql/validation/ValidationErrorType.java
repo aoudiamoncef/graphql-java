@@ -1,8 +1,12 @@
 package graphql.validation;
 
 
-public enum ValidationErrorType {
+import graphql.PublicApi;
 
+@PublicApi
+public enum ValidationErrorType implements ValidationErrorClassification {
+
+    MaxValidationErrorsReached,
     DefaultForNonNullArgument,
     WrongType,
     UnknownType,
@@ -30,5 +34,9 @@ public enum ValidationErrorType {
     LoneAnonymousOperationViolation,
     NonExecutableDefinition,
     DuplicateOperationName,
-    DuplicateDirectiveName
+    DuplicateFragmentName,
+    DuplicateDirectiveName,
+    DuplicateArgumentNames,
+    DuplicateVariableName,
+    NullValueForNonNullArgument
 }

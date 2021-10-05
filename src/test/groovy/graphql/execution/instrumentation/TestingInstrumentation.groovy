@@ -3,7 +3,6 @@ package graphql.execution.instrumentation
 import graphql.ExecutionInput
 import graphql.ExecutionResult
 import graphql.execution.ExecutionContext
-import graphql.execution.instrumentation.parameters.InstrumentationDeferredFieldParameters
 import graphql.execution.instrumentation.parameters.InstrumentationExecuteOperationParameters
 import graphql.execution.instrumentation.parameters.InstrumentationExecutionParameters
 import graphql.execution.instrumentation.parameters.InstrumentationExecutionStrategyParameters
@@ -22,7 +21,7 @@ import java.util.concurrent.CompletableFuture
 class TestingInstrumentation implements Instrumentation {
 
     def instrumentationState = new InstrumentationState() {}
-    def executionList = []
+    List<String> executionList = []
     List<Throwable> throwableList = []
     List<DataFetchingEnvironment> dfInvocations = []
     List<Class> dfClasses = []
@@ -64,9 +63,9 @@ class TestingInstrumentation implements Instrumentation {
     }
 
     @Override
-    DeferredFieldInstrumentationContext beginDeferredField(InstrumentationDeferredFieldParameters parameters) {
+    InstrumentationContext<ExecutionResult> beginSubscribedFieldEvent(InstrumentationFieldParameters parameters) {
         assert parameters.getInstrumentationState() == instrumentationState
-        return new TestingInstrumentContext("deferred-field-$parameters.field.name", executionList, throwableList)
+        return new TestingInstrumentContext("subscribed-field-event-$parameters.field.name", executionList, throwableList)
     }
 
     @Override

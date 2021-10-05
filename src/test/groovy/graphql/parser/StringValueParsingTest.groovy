@@ -2,6 +2,9 @@ package graphql.parser
 
 import spock.lang.Specification
 
+import static java.util.Arrays.asList
+import static java.util.stream.Collectors.joining
+
 class StringValueParsingTest extends Specification {
 
     def "parsing quoted string should work"() {
@@ -37,8 +40,7 @@ class StringValueParsingTest extends Specification {
         parsed == '''"'''
     }
 
-    def "parsing emoji should work"() {
-        // needs surrogate pairs for this emoji
+    def "parsing beer stein as surrogate pair should work"() {
         given:
         def input = '''"\\ud83c\\udf7a"'''
 
@@ -49,17 +51,16 @@ class StringValueParsingTest extends Specification {
         parsed == '''🍺''' // contains the beer icon 	U+1F37A  : http://www.charbase.com/1f37a-unicode-beer-mug
     }
 
-    def "parsing simple unicode should work"() {
+    def "parsing simple unicode should work - Basic Multilingual Plane (BMP)"() {
         given:
-        def input = '''"\\u56fe"'''
+        def input = '''"\\u5564\\u9152"'''
 
         when:
         String parsed = StringValueParsing.parseSingleQuotedString(input)
 
         then:
-        parsed == '''图'''
+        parsed == '''啤酒'''
     }
-
 
     def "parsing triple quoted string should work"() {
         given:
@@ -95,36 +96,129 @@ class StringValueParsingTest extends Specification {
         parsed == '''| inner quoted """ part but with all others left as they are \\n with slash escaped chars \\b\\ud83c\\udf7a\\r\\t\\n |'''
     }
 
-    def "remove common indentation works as per spec"() {
+    def joinLines(String... args) {
+        asList(args).stream().collect(joining('\n'))
+    }
+
+    def "removes uniform indentation from a string"() {
         given:
-        def input = '''
-
-
-        line A
-       line B
-      line C
-     line D
-     line E
-      line F
-       line G
-        line H
-
-
-''' // 2 empty lines at the start and end
+        def input = joinLines(
+                '',
+                '    Hello,',
+                '      World!',
+                '',
+                '    Yours,',
+                '      GraphQL.',
+        )
 
         when:
         String parsed = StringValueParsing.removeIndentation(input)
 
         then:
-        def expected = '''    line A
-   line B
-  line C
- line D
- line E
-  line F
-   line G
-    line H'''
+        def expected = joinLines('Hello,', '  World!', '', 'Yours,', '  GraphQL.')
         parsed == expected
+    }
 
+    def "removes empty leading and trailing lines"() {
+        given:
+        def input = joinLines(
+                '',
+                '',
+                '    Hello,',
+                '      World!',
+                '',
+                '    Yours,',
+                '      GraphQL.',
+                '',
+                '',
+        )
+
+        when:
+        String parsed = StringValueParsing.removeIndentation(input)
+
+        then:
+        def expected = joinLines('Hello,', '  World!', '', 'Yours,', '  GraphQL.')
+        parsed == expected
+    }
+
+    def "removes blank leading and trailing lines"() {
+        given:
+        def input = joinLines(
+                '  ',
+                '        ',
+                '    Hello,',
+                '      World!',
+                '',
+                '    Yours,',
+                '      GraphQL.',
+                '        ',
+                '  ',
+        )
+
+        when:
+        String parsed = StringValueParsing.removeIndentation(input)
+
+        then:
+        def expected = joinLines('Hello,', '  World!', '', 'Yours,', '  GraphQL.')
+        parsed == expected
+    }
+
+    def "retains indentation from first line"() {
+        given:
+        def input = joinLines(
+                '    Hello,',
+                '      World!',
+                '',
+                '    Yours,',
+                '      GraphQL.',
+        )
+
+        when:
+        String parsed = StringValueParsing.removeIndentation(input)
+
+        then:
+        def expected = joinLines('    Hello,', '  World!', '', 'Yours,', '  GraphQL.')
+        parsed == expected
+    }
+
+    def "does not alter trailing spaces"() {
+        given:
+        def input = joinLines(
+                '               ',
+                '    Hello,     ',
+                '      World!   ',
+                '               ',
+                '    Yours,     ',
+                '      GraphQL. ',
+                '               ',
+        )
+
+        when:
+        String parsed = StringValueParsing.removeIndentation(input)
+
+        then:
+        def expected = joinLines(
+                'Hello,     ',
+                '  World!   ',
+                '           ',
+                'Yours,     ',
+                '  GraphQL. ',
+        )
+        parsed == expected
+    }
+
+    def "1438 - losing one character when followed by a space is fixed"() {
+        given:
+        def input = '''L1
+L 2
+L 3'''
+        when:
+        String parsed = StringValueParsing.removeIndentation(input)
+
+        then:
+        def expected = '''L1
+L 2
+L 3'''
+        parsed == expected
     }
 }

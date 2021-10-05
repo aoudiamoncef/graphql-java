@@ -1,14 +1,20 @@
 package graphql.language;
 
+import com.google.common.collect.ImmutableList;
 import graphql.Internal;
 import graphql.PublicApi;
+import graphql.collect.ImmutableKit;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
+import static graphql.Assert.assertNotNull;
+import static graphql.collect.ImmutableKit.emptyList;
+
 @PublicApi
-public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinition {
+public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinition implements SDLExtensionDefinition {
 
     @Internal
     protected InputObjectTypeExtensionDefinition(String name,
@@ -17,8 +23,9 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
                                                  Description description,
                                                  SourceLocation sourceLocation,
                                                  List<Comment> comments,
-                                                 IgnoredChars ignoredChars) {
-        super(name, directives, inputValueDefinitions, description, sourceLocation, comments, ignoredChars);
+                                                 IgnoredChars ignoredChars,
+                                                 Map<String, String> additionalData) {
+        super(name, directives, inputValueDefinitions, description, sourceLocation, comments, ignoredChars, additionalData);
     }
 
     @Override
@@ -29,7 +36,8 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
                 getDescription(),
                 getSourceLocation(),
                 getComments(),
-                getIgnoredChars());
+                getIgnoredChars(),
+                getAdditionalData());
     }
 
     @Override
@@ -45,6 +53,13 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
         return new Builder();
     }
 
+    @Override
+    public InputObjectTypeExtensionDefinition withNewChildren(NodeChildrenContainer newChildren) {
+        return transformExtension(builder -> builder
+                .directives(newChildren.getChildren(CHILD_DIRECTIVES))
+                .inputValueDefinitions(newChildren.getChildren(CHILD_INPUT_VALUES_DEFINITIONS))
+        );
+    }
 
     public InputObjectTypeExtensionDefinition transformExtension(Consumer<Builder> builderConsumer) {
         Builder builder = new Builder(this);
@@ -52,26 +67,28 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
         return builder.build();
     }
 
-    public static final class Builder implements NodeBuilder {
+    public static final class Builder implements NodeDirectivesBuilder {
         private SourceLocation sourceLocation;
-        private List<Comment> comments = new ArrayList<>();
+        private ImmutableList<Comment> comments = emptyList();
         private String name;
         private Description description;
-        private List<Directive> directives = new ArrayList<>();
-        private List<InputValueDefinition> inputValueDefinitions = new ArrayList<>();
+        private ImmutableList<Directive> directives = emptyList();
+        private ImmutableList<InputValueDefinition> inputValueDefinitions = emptyList();
         private IgnoredChars ignoredChars = IgnoredChars.EMPTY;
+        private Map<String, String> additionalData = new LinkedHashMap<>();
 
         private Builder() {
         }
 
         private Builder(InputObjectTypeDefinition existing) {
             this.sourceLocation = existing.getSourceLocation();
-            this.comments = existing.getComments();
+            this.comments = ImmutableList.copyOf(existing.getComments());
             this.name = existing.getName();
             this.description = existing.getDescription();
-            this.directives = existing.getDirectives();
-            this.inputValueDefinitions = existing.getInputValueDefinitions();
+            this.directives = ImmutableList.copyOf(existing.getDirectives());
+            this.inputValueDefinitions = ImmutableList.copyOf(existing.getInputValueDefinitions());
             this.ignoredChars = existing.getIgnoredChars();
+            this.additionalData = new LinkedHashMap<>(existing.getAdditionalData());
         }
 
 
@@ -81,7 +98,7 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
         }
 
         public Builder comments(List<Comment> comments) {
-            this.comments = comments;
+            this.comments = ImmutableList.copyOf(comments);
             return this;
         }
 
@@ -95,13 +112,25 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
             return this;
         }
 
+        @Override
         public Builder directives(List<Directive> directives) {
-            this.directives = directives;
+            this.directives = ImmutableList.copyOf(directives);
             return this;
         }
 
+        public Builder directive(Directive directive) {
+            this.directives = ImmutableKit.addToList(directives, directive);
+            return this;
+        }
+
+
         public Builder inputValueDefinitions(List<InputValueDefinition> inputValueDefinitions) {
-            this.inputValueDefinitions = inputValueDefinitions;
+            this.inputValueDefinitions = ImmutableList.copyOf(inputValueDefinitions);
+            return this;
+        }
+
+        public Builder inputValueDefinition(InputValueDefinition inputValueDefinition) {
+            this.inputValueDefinitions = ImmutableKit.addToList(inputValueDefinitions, inputValueDefinition);
             return this;
         }
 
@@ -110,6 +139,17 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
             return this;
         }
 
+        public Builder additionalData(Map<String, String> additionalData) {
+            this.additionalData = assertNotNull(additionalData);
+            return this;
+        }
+
+        public Builder additionalData(String key, String value) {
+            this.additionalData.put(key, value);
+            return this;
+        }
+
+
         public InputObjectTypeExtensionDefinition build() {
             InputObjectTypeExtensionDefinition inputObjectTypeDefinition = new InputObjectTypeExtensionDefinition(name,
                     directives,
@@ -117,7 +157,7 @@ public class InputObjectTypeExtensionDefinition extends InputObjectTypeDefinitio
                     description,
                     sourceLocation,
                     comments,
-                    ignoredChars);
+                    ignoredChars, additionalData);
             return inputObjectTypeDefinition;
         }
     }
